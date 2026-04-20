@@ -84,6 +84,18 @@ export function saveCogs(items) {
   })
 }
 
+/**
+ * POST /pl/cogs/bulk
+ * Массовый импорт из Excel: [{article, cost_price, name?}, …]
+ */
+export function bulkSaveCogs(items) {
+  return request('/pl/cogs/bulk', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(items),
+  })
+}
+
 // ── Settings / Ozon store ────────────────────────────────────────────────────
 
 /** GET /settings/ozon — статус подключения магазина */

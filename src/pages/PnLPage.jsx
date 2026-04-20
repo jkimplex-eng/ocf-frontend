@@ -1,6 +1,7 @@
-import React, { useState, useRef, useMemo } from 'react'
+import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react'
+import * as XLSX from 'xlsx'
 import { BarChart, Bar, XAxis, Cell, ResponsiveContainer, Tooltip } from 'recharts'
-import { fetchPlSummary, saveCogs } from '../api/client'
+import { fetchPlSummary, saveCogs, bulkSaveCogs } from '../api/client'
 import AlertsPanel from '../components/AlertsPanel'
 
 // ── Format ────────────────────────────────────────────────────────────────────
@@ -294,14 +295,259 @@ function Top3Sku({ skus }) {
   )
 }
 
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function Toast({ message, onDone }) {
+  useEffect(() => {
+    const t = setTimeout(onDone, 3000)
+    return () => clearTimeout(t)
+  }, [onDone])
+
+  return (
+    <div style={{
+      position: 'fixed', bottom: '28px', right: '28px', zIndex: 500,
+      background: 'rgba(48,209,88,0.14)', border: '1px solid rgba(48,209,88,0.35)',
+      borderRadius: '14px', padding: '12px 20px',
+      fontSize: '14px', fontWeight: 600, color: 'var(--green)',
+      backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
+      boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+      display: 'flex', alignItems: 'center', gap: '8px',
+      animation: 'fadeUp 0.4s cubic-bezier(0.22,1,0.36,1) both',
+      fontFamily: 'var(--font)',
+    }}>
+      ✓ {message}
+    </div>
+  )
+}
+
+// ── Excel parse helpers ───────────────────────────────────────────────────────
+function detectColumns(firstRow) {
+  const lower = {}
+  Object.keys(firstRow).forEach(k => { lower[k.toLowerCase().trim()] = k })
+
+  const articleKey =
+    lower['артикул'] ?? lower['артикул продавца'] ?? lower['article'] ??
+    lower['sku'] ?? lower['sku_id'] ?? lower['код товара'] ?? null
+
+  const costKey =
+    lower['себестоимость'] ?? lower['цена закупки'] ?? lower['закупочная цена'] ??
+    lower['cost'] ?? lower['cost_price'] ?? lower['цена'] ?? null
+
+  const nameKey =
+    lower['название'] ?? lower['наименование'] ?? lower['название товара'] ??
+    lower['name'] ?? lower['товар'] ?? null
+
+  return { articleKey, costKey, nameKey }
+}
+
+function parseExcelRows(rows) {
+  if (!rows.length) return []
+  const { articleKey, costKey, nameKey } = detectColumns(rows[0])
+
+  return rows.map((row, i) => {
+    const article   = articleKey ? String(row[articleKey] ?? '').trim() : ''
+    const rawCost   = costKey    ? row[costKey]                          : null
+    const name      = nameKey    ? String(row[nameKey]  ?? '').trim()   : ''
+    const cost_price = rawCost != null && rawCost !== '' ? parseFloat(String(rawCost).replace(',', '.')) : null
+    const error =
+      !article                         ? 'Нет артикула'      :
+      cost_price == null || isNaN(cost_price) ? 'Нет себестоимости' : null
+    return { _row: i + 2, article, cost_price: cost_price ?? 0, name, error }
+  })
+}
+
+// ── Import Modal ──────────────────────────────────────────────────────────────
+function ImportModal({ rows, onConfirm, onCancel, saving }) {
+  const valid   = rows.filter(r => !r.error)
+  const invalid = rows.filter(r =>  r.error)
+
+  const thStyle = {
+    padding: '8px 12px', fontSize: '11px', fontWeight: 600, color: 'var(--text3)',
+    textTransform: 'uppercase', letterSpacing: '0.3px',
+    borderBottom: '1px solid var(--glass-border)', textAlign: 'left',
+  }
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 300,
+      background: 'rgba(0,0,0,0.72)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
+      padding: '24px',
+    }}>
+      <div style={{
+        background: 'var(--bg2)', border: '1px solid var(--glass-border-md)',
+        borderRadius: '20px', width: '580px', maxWidth: '100%',
+        maxHeight: '80vh', display: 'flex', flexDirection: 'column',
+        boxShadow: '0 24px 80px rgba(0,0,0,0.7)',
+        animation: 'fadeUp 0.3s cubic-bezier(0.22,1,0.36,1) both',
+        fontFamily: 'var(--font)',
+      }}>
+        {/* Header */}
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '20px 24px', borderBottom: '1px solid var(--glass-border)',
+        }}>
+          <div>
+            <h2 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text1)', margin: 0 }}>
+              Импорт себестоимости · {valid.length} товаров
+            </h2>
+            {invalid.length > 0 && (
+              <p style={{ fontSize: '12px', color: 'var(--red)', marginTop: '4px' }}>
+                {invalid.length} строк с ошибками — они не будут сохранены
+              </p>
+            )}
+          </div>
+          <button onClick={onCancel} style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            color: 'var(--text3)', fontSize: '22px', lineHeight: 1, padding: '4px',
+          }}>×</button>
+        </div>
+
+        {/* Table */}
+        <div style={{ overflowY: 'auto', flex: 1, padding: '0 4px' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th style={thStyle}>Артикул</th>
+                <th style={thStyle}>Название</th>
+                <th style={{ ...thStyle, textAlign: 'right' }}>Себестоимость ₽</th>
+                <th style={thStyle}>Статус</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, i) => (
+                <tr key={i} style={{
+                  borderBottom: '1px solid rgba(255,255,255,0.04)',
+                  background: row.error ? 'rgba(255,69,58,0.06)' : 'transparent',
+                }}>
+                  <td style={{
+                    padding: '8px 12px', fontSize: '12px', fontFamily: 'monospace',
+                    color: row.error ? 'var(--red)' : 'var(--text1)',
+                  }}>
+                    {row.article || <span style={{ color: 'var(--text3)' }}>—</span>}
+                  </td>
+                  <td style={{
+                    padding: '8px 12px', fontSize: '12px', color: 'var(--text2)',
+                    maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>
+                    {row.name || <span style={{ color: 'var(--text3)' }}>—</span>}
+                  </td>
+                  <td style={{
+                    padding: '8px 12px', fontSize: '12px', fontFamily: 'monospace',
+                    textAlign: 'right',
+                    color: row.error ? 'var(--text3)' : 'var(--text1)',
+                    fontWeight: row.error ? 400 : 600,
+                  }}>
+                    {row.error === 'Нет себестоимости' ? '—' : `${Number(row.cost_price).toLocaleString('ru')} ₽`}
+                  </td>
+                  <td style={{ padding: '8px 12px' }}>
+                    {row.error
+                      ? <span style={{
+                          fontSize: '11px', color: 'var(--red)',
+                          background: 'rgba(255,69,58,0.1)', border: '1px solid rgba(255,69,58,0.25)',
+                          borderRadius: '8px', padding: '2px 8px',
+                        }}>{row.error}</span>
+                      : <span style={{
+                          fontSize: '11px', color: 'var(--green)',
+                          background: 'rgba(48,209,88,0.1)', border: '1px solid rgba(48,209,88,0.25)',
+                          borderRadius: '8px', padding: '2px 8px',
+                        }}>Ок</span>
+                    }
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Actions */}
+        <div style={{
+          display: 'flex', justifyContent: 'flex-end', gap: '10px',
+          padding: '16px 24px', borderTop: '1px solid var(--glass-border)',
+        }}>
+          <button onClick={onCancel} className="btn-secondary" style={{ borderRadius: '12px' }}>
+            Отмена
+          </button>
+          <button
+            onClick={() => onConfirm(valid)}
+            disabled={saving || valid.length === 0}
+            className="btn-primary"
+            style={{ borderRadius: '12px', padding: '9px 22px' }}
+          >
+            {saving
+              ? <><span style={{
+                  display: 'inline-block', width: '13px', height: '13px', marginRight: '8px',
+                  border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white',
+                  borderRadius: '50%',
+                }} className="animate-spin" />Сохраняем…</>
+              : `Сохранить ${valid.length} товаров`
+            }
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── COGS editor ───────────────────────────────────────────────────────────────
 function CogsEditor({ skus, onSaved }) {
-  const [vals,   setVals]   = useState(() =>
+  const [vals,        setVals]        = useState(() =>
     Object.fromEntries(skus.map(s => [s.sku_id, String(s.cost_per_unit ?? s.cost ?? 0)]))
   )
-  const [saving, setSaving] = useState(false)
-  const [flash,  setFlash]  = useState(false)
+  const [saving,      setSaving]      = useState(false)
+  const [flash,       setFlash]       = useState(false)
+  const [importRows,  setImportRows]  = useState(null)   // null = modal closed
+  const [importSaving,setImportSaving]= useState(false)
+  const [toast,       setToast]       = useState(null)
+  const fileRef = useRef(null)
 
+  // Parse file when selected
+  async function handleFileChange(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''                        // allow re-select same file
+    const buf  = await file.arrayBuffer()
+    const wb   = XLSX.read(new Uint8Array(buf), { type: 'array' })
+    const ws   = wb.Sheets[wb.SheetNames[0]]
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: '' })
+    setImportRows(parseExcelRows(rows))
+  }
+
+  // Confirm bulk save
+  const handleImportConfirm = useCallback(async (validRows) => {
+    setImportSaving(true)
+    try {
+      const items = validRows.map(r => ({
+        article:    r.article,
+        cost_price: r.cost_price,
+        name:       r.name,
+      }))
+      const res = await bulkSaveCogs(items)
+      setImportRows(null)
+      const n = (res.updated ?? 0) + (res.created ?? 0)
+      setToast(`Обновлено ${n} товаров`)
+      onSaved()
+    } catch (err) {
+      setToast(`Ошибка: ${err.message}`)
+    } finally {
+      setImportSaving(false)
+    }
+  }, [onSaved])
+
+  // Download template
+  function downloadTemplate() {
+    const data = skus.map(s => ({
+      'Артикул':       s.sku_id,
+      'Название':      s.name || '',
+      'Себестоимость': s.cost_per_unit || '',
+    }))
+    const ws = XLSX.utils.json_to_sheet(data)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Себестоимость')
+    XLSX.writeFile(wb, 'cogs_template.xlsx')
+  }
+
+  // Manual save (per-row inputs)
   async function save() {
     setSaving(true)
     try {
@@ -322,8 +568,61 @@ function CogsEditor({ skus, onSaved }) {
     </p>
   )
 
+  const btnGhost = {
+    background: 'transparent', border: '1px solid var(--glass-border)',
+    borderRadius: '12px', padding: '8px 18px',
+    fontSize: '13px', fontWeight: 500, color: 'var(--text2)',
+    cursor: 'pointer', fontFamily: 'var(--font)',
+    transition: 'all 0.2s',
+  }
+
   return (
-    <div>
+    <>
+      {/* Hidden file input */}
+      <input
+        ref={fileRef} type="file" accept=".xlsx,.xls,.csv"
+        style={{ display: 'none' }} onChange={handleFileChange}
+      />
+
+      {/* Import modal */}
+      {importRows && (
+        <ImportModal
+          rows={importRows}
+          saving={importSaving}
+          onConfirm={handleImportConfirm}
+          onCancel={() => setImportRows(null)}
+        />
+      )}
+
+      {/* Toast */}
+      {toast && <Toast message={toast} onDone={() => setToast(null)} />}
+
+      {/* Header row: title + import/template buttons */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+        <p style={{ fontSize: '13px', color: 'var(--text2)' }}>
+          Укажите закупочную цену для каждого SKU
+        </p>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            onClick={downloadTemplate}
+            style={btnGhost}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--glass)'; e.currentTarget.style.color = 'var(--text1)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text2)' }}
+          >
+            ↓ Скачать шаблон
+          </button>
+          <button
+            onClick={() => fileRef.current?.click()}
+            style={btnGhost}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--glass)'; e.currentTarget.style.color = 'var(--text1)' }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text2)' }}
+          >
+            ↑ Импорт из Excel
+          </button>
+        </div>
+      </div>
+
+      {/* SKU rows */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
         {skus.map(s => (
           <div key={s.sku_id} style={{
@@ -343,27 +642,26 @@ function CogsEditor({ skus, onSaved }) {
               <input type="number" min="0" step="10"
                 value={vals[s.sku_id] ?? 0}
                 onChange={e => setVals(p => ({ ...p, [s.sku_id]: e.target.value }))}
-                className="input" style={{ width: '96px', textAlign: 'right', padding: '6px 10px', fontSize: '13px' }}
+                className="input"
+                style={{ width: '96px', textAlign: 'right', padding: '6px 10px', fontSize: '13px' }}
               />
               <span style={{ fontSize: '12px', color: 'var(--text3)', width: '32px' }}>₽/шт</span>
             </div>
           </div>
         ))}
       </div>
+
+      {/* Footer */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '16px', paddingTop: '12px' }}>
         <p style={{ fontSize: '12px', color: 'var(--text3)' }}>
           После сохранения P&amp;L пересчитается автоматически
         </p>
-        <button onClick={save} disabled={saving}
-          className="btn-primary"
-          style={{
-            background: flash ? 'var(--green)' : 'var(--blue)',
-            padding: '8px 20px', fontSize: '13px',
-          }}>
+        <button onClick={save} disabled={saving} className="btn-primary"
+          style={{ background: flash ? 'var(--green)' : 'var(--blue)', padding: '8px 20px', fontSize: '13px' }}>
           {saving ? 'Сохраняем…' : flash ? '✓ Сохранено' : 'Сохранить'}
         </button>
       </div>
-    </div>
+    </>
   )
 }
 
