@@ -1,302 +1,171 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import React, { useState, useEffect, useRef, useMemo } from 'react'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import { scoreStream, fetchLimits } from '../api/client'
 
-// ── Helpers ────────────────────────────────────────────────────────────────
-const fmt = {
-  rub: v => {
-    if (!v && v !== 0) return '—'
-    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)} млн ₽`
-    if (v >= 1_000)     return `${(v / 1_000).toFixed(0)} тыс ₽`
-    return `${Number(v).toLocaleString('ru')} ₽`
-  },
-  pct: (v, decimals = 0) => v != null ? `${Number(v).toFixed(decimals)}%` : '—',
-  num: v => v != null ? Number(v).toLocaleString('ru') : '—',
+// ── Dark theme palette ────────────────────────────────────────────────────────
+const D = {
+  bg0:    '#0f1117',
+  bg1:    '#1a1d27',
+  bg2:    '#22263a',
+  border: 'rgba(255,255,255,0.08)',
+  text1:  '#f1f5f9',
+  text2:  '#94a3b8',
+  text3:  '#475569',
+  accent: '#6366f1',
+  green:  '#22c55e',
+  red:    '#ef4444',
+  amber:  '#f59e0b',
+  teal:   '#14b8a6',
 }
 
-const COLOR_MAP = {
-  green:  { bg: 'bg-green-50',  border: 'border-green-200', badge: 'bg-green-100 text-green-800',  bar: 'bg-green-500',  dot: 'bg-green-500',  text: 'text-green-700'  },
-  yellow: { bg: 'bg-yellow-50', border: 'border-yellow-200',badge: 'bg-yellow-100 text-yellow-800',bar: 'bg-yellow-400', dot: 'bg-yellow-400', text: 'text-yellow-700' },
-  red:    { bg: 'bg-red-50',    border: 'border-red-200',   badge: 'bg-red-100 text-red-800',      bar: 'bg-red-500',    dot: 'bg-red-500',    text: 'text-red-700'    },
+// ── Format ────────────────────────────────────────────────────────────────────
+const rub = v => {
+  if (v == null || v === '') return '—'
+  const n = Number(v)
+  if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)} млн ₽`
+  if (Math.abs(n) >= 1_000)     return `${(n / 1_000).toFixed(0)} тыс ₽`
+  return `${n.toLocaleString('ru')} ₽`
 }
+const pct = (v, d = 1) => v == null ? '—' : `${Number(v).toFixed(d)}%`
 
-const VERDICT_ICON = { green: '🟢', yellow: '🟡', red: '🔴' }
-
-const COMPONENT_KEYS = [
-  { key: 'growth_index',      label: 'Рост',        max: 25, icon: '📈' },
-  { key: 'competition_index', label: 'Конкуренция', max: 25, icon: '⚔️' },
-  { key: 'entry_barrier',     label: 'Барьер входа',max: 20, icon: '🚧' },
-  { key: 'margin',            label: 'Маржа',        max: 20, icon: '💰' },
-  { key: 'seasonal',          label: 'Сезонность',   max: 10, icon: '📅' },
+// ── Component score keys ──────────────────────────────────────────────────────
+const COMP_KEYS = [
+  { key: 'growth_index',      label: 'Рост категории',  weight: 25 },
+  { key: 'competition_index', label: 'Конкуренция',     weight: 25 },
+  { key: 'entry_barrier',     label: 'Барьер входа',    weight: 20 },
+  { key: 'margin',            label: 'Маржинальность',  weight: 20 },
+  { key: 'seasonal',          label: 'Сезонность',      weight: 10 },
 ]
 
-// ── ScoreBar ───────────────────────────────────────────────────────────────
-function ScoreBar({ score, max, color = 'blue' }) {
-  const pct = Math.round(score / max * 100)
-  const barColor =
-    pct >= 75 ? 'bg-green-500' :
-    pct >= 45 ? 'bg-yellow-400' : 'bg-red-500'
+const WEAKNESS_HINT = {
+  growth_index:      'низкий рост категории — рынок замедляется',
+  competition_index: 'высокая конкуренция — сложно занять позицию',
+  entry_barrier:     'высокий барьер входа — нужен бюджет на отзывы',
+  margin:            'низкая маржинальность — юнит-экономика под вопросом',
+  seasonal:          'выраженная сезонность — риск сезонных остатков',
+}
+
+const QUICK_PATHS = [
+  'Красота и здоровье/Уход за лицом',
+  'Красота и здоровье/Уход за телом',
+  'Красота и здоровье/Уход за волосами',
+  'Красота и здоровье/Декоративная косметика',
+  'Дом и сад/Декор и интерьер',
+  'Спорт и отдых/Спортивное питание',
+]
+
+const DEFAULT_PATHS = [
+  'Красота и здоровье/Уход за лицом',
+  'Красота и здоровье/Уход за телом',
+]
+
+// ── Small UI helpers ──────────────────────────────────────────────────────────
+function DarkField({ label, children }) {
   return (
-    <div className="flex items-center gap-1.5">
-      <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-        <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className="text-xs tabular-nums text-gray-500 w-8 text-right">{score}/{max}</span>
+    <div>
+      <label style={{ display: 'block', fontSize: '11px', color: D.text2, marginBottom: '6px' }}>
+        {label}
+      </label>
+      {children}
     </div>
   )
 }
 
-// ── TotalScoreRing ─────────────────────────────────────────────────────────
-function ScoreRing({ score, color }) {
-  const c = COLOR_MAP[color] || COLOR_MAP.red
-  const r = 28, cx = 32, cy = 32
-  const circ = 2 * Math.PI * r
-  const dash  = circ * score / 100
+function DarkInput({ value, onChange, type = 'text', placeholder, width = '130px' }) {
   return (
-    <div className="relative inline-flex items-center justify-center w-16 h-16">
-      <svg className="absolute inset-0 -rotate-90" width="64" height="64">
-        <circle cx={cx} cy={cy} r={r} fill="none" stroke="#e5e7eb" strokeWidth="5" />
-        <circle cx={cx} cy={cy} r={r} fill="none"
-          stroke={color === 'green' ? '#22c55e' : color === 'yellow' ? '#eab308' : '#ef4444'}
-          strokeWidth="5"
-          strokeDasharray={`${dash} ${circ}`}
-          strokeLinecap="round"
-        />
-      </svg>
-      <span className={`relative text-lg font-bold ${c.text}`}>{score}</span>
+    <input
+      type={type} value={value} placeholder={placeholder}
+      onChange={e => onChange(e.target.value)}
+      style={{
+        width, boxSizing: 'border-box',
+        background: D.bg2, border: `1px solid ${D.border}`,
+        borderRadius: '8px', color: D.text1,
+        padding: '8px 12px', fontSize: '13px', fontFamily: 'monospace', outline: 'none',
+      }}
+    />
+  )
+}
+
+// ── Score bar (horizontal) ────────────────────────────────────────────────────
+function HBar({ value, max = 100, height = 8, color }) {
+  const fill = Math.min(100, Math.max(0, (value / max) * 100))
+  const c = color || (fill > 70 ? D.green : fill >= 40 ? D.accent : D.red)
+  return (
+    <div style={{ flex: 1, height, background: 'rgba(255,255,255,0.06)', borderRadius: height / 2, overflow: 'hidden' }}>
+      <div style={{ width: `${fill}%`, height: '100%', background: c, borderRadius: height / 2, transition: 'width 0.7s ease' }} />
     </div>
   )
 }
 
-// ── Category result card ───────────────────────────────────────────────────
-function CategoryCard({ result, expanded, onToggle }) {
-  const c = COLOR_MAP[result.color] || COLOR_MAP.red
-  return (
-    <div className={`rounded-xl border ${c.border} ${c.bg} overflow-hidden transition-all`}>
-      {/* Header row */}
-      <button
-        onClick={onToggle}
-        className="w-full flex items-center gap-4 px-4 py-3 text-left hover:brightness-95 transition-all"
-      >
-        {/* Score ring */}
-        <ScoreRing score={result.total_score} color={result.color} />
-
-        {/* Name + verdict */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-semibold text-gray-800 truncate">{result.name}</span>
-            <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${c.badge}`}>
-              {VERDICT_ICON[result.color]} {result.verdict}
-            </span>
-          </div>
-          <p className="text-xs text-gray-500 mt-0.5 font-mono truncate">{result.path}</p>
-        </div>
-
-        {/* Mini component bars */}
-        <div className="hidden sm:flex flex-col gap-1 w-40">
-          {COMPONENT_KEYS.map(({ key, label, max, icon }) => {
-            const comp = result.components?.[key]
-            if (!comp) return null
-            return (
-              <div key={key} className="flex items-center gap-1.5">
-                <span className="text-xs w-3">{icon}</span>
-                <div className="flex-1 h-1.5 bg-white/60 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full ${c.bar}`}
-                    style={{ width: `${comp.pct}%`, opacity: 0.8 }}
-                  />
-                </div>
-                <span className="text-xs text-gray-500 w-6 text-right tabular-nums">{comp.score}</span>
-              </div>
-            )
-          })}
-        </div>
-
-        {/* Key metrics */}
-        <div className="hidden md:flex flex-col items-end gap-1 text-right min-w-[110px]">
-          <span className="text-sm font-semibold text-gray-700">{fmt.rub(result.metrics?.revenue_30d)}</span>
-          <span className="text-xs text-gray-400">выручка 30д</span>
-          {result.metrics?.margin_pct != null && (
-            <span className={`text-xs font-medium ${result.metrics.margin_pct >= 15 ? 'text-green-600' : result.metrics.margin_pct >= 0 ? 'text-yellow-600' : 'text-red-600'}`}>
-              маржа {fmt.pct(result.metrics.margin_pct, 1)}
-            </span>
-          )}
-        </div>
-
-        {/* Chevron */}
-        <svg className={`w-4 h-4 text-gray-400 flex-shrink-0 transition-transform ${expanded ? 'rotate-180' : ''}`}
-          fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7"/>
-        </svg>
-      </button>
-
-      {/* Expanded detail */}
-      {expanded && (
-        <div className="border-t border-white/60 bg-white/50 px-4 py-4 space-y-4">
-          {/* Components breakdown */}
-          <div>
-            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Компоненты скора</h4>
-            <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
-              {COMPONENT_KEYS.map(({ key, icon, max }) => {
-                const comp = result.components?.[key]
-                if (!comp) return null
-                return (
-                  <div key={key} className="bg-white rounded-lg p-2.5 border border-gray-100 shadow-sm">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs text-gray-500">{icon} {comp.label}</span>
-                      <span className="text-sm font-bold text-gray-800 tabular-nums">{comp.score}<span className="text-gray-400 font-normal">/{comp.max}</span></span>
-                    </div>
-                    <ScoreBar score={comp.score} max={comp.max} />
-                    <p className="text-xs text-gray-600 mt-1.5 leading-tight">{comp.signal}</p>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
-          {/* Metrics row */}
-          <div>
-            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Метрики категории</h4>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {[
-                { label: 'Выручка 30д',       value: fmt.rub(result.metrics?.revenue_30d) },
-                { label: 'Выручка пред. 30д', value: fmt.rub(result.metrics?.revenue_prev_30d) },
-                { label: 'Средняя цена',       value: fmt.rub(result.metrics?.avg_price) },
-                { label: 'Товаров в выборке',  value: fmt.num(result.metrics?.total_products) },
-                { label: 'Доля топ-10',        value: fmt.pct((result.metrics?.top10_seller_share ?? 0) * 100, 0) },
-                { label: 'Отзывов топ-20',     value: fmt.num(result.metrics?.avg_reviews_top20) },
-                { label: 'Расч. маржа',        value: fmt.pct(result.metrics?.margin_pct, 1) },
-              ].map(({ label, value }) => (
-                <div key={label} className="bg-white rounded-lg px-3 py-2 border border-gray-100">
-                  <p className="text-xs text-gray-400">{label}</p>
-                  <p className="text-sm font-semibold text-gray-800 mt-0.5">{value}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Signals */}
-          {result.signals?.length > 0 && (
-            <div>
-              <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Сигналы</h4>
-              <ul className="space-y-1">
-                {result.signals.map((s, i) => (
-                  <li key={i} className="text-sm text-gray-700 bg-white/80 rounded-lg px-3 py-1.5 border border-gray-100">
-                    {s}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {result.error && (
-            <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">⚠️ {result.error}</p>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Summary strip ──────────────────────────────────────────────────────────
-function SummaryStrip({ results }) {
-  const green  = results.filter(r => r.color === 'green').length
-  const yellow = results.filter(r => r.color === 'yellow').length
-  const red    = results.filter(r => r.color === 'red').length
-  const avg    = results.length ? Math.round(results.reduce((s, r) => s + r.total_score, 0) / results.length) : 0
-
-  return (
-    <div className="grid grid-cols-4 gap-3">
-      {[
-        { label: 'Средний скор', value: avg,    sub: 'из 100',         cls: 'text-blue-600'   },
-        { label: 'Входить',      value: green,  sub: 'категорий 🟢',  cls: 'text-green-600'  },
-        { label: 'Мониторить',   value: yellow, sub: 'категорий 🟡',  cls: 'text-yellow-600' },
-        { label: 'Избегать',     value: red,    sub: 'категорий 🔴',  cls: 'text-red-600'    },
-      ].map(({ label, value, sub, cls }) => (
-        <div key={label} className="card p-3 text-center">
-          <p className="text-xs text-gray-500">{label}</p>
-          <p className={`text-2xl font-bold mt-0.5 ${cls}`}>{value}</p>
-          <p className="text-xs text-gray-400">{sub}</p>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// ── Category path picker ───────────────────────────────────────────────────
+// ── PathPicker (dark) ─────────────────────────────────────────────────────────
 function PathPicker({ selected, onChange }) {
   const [input, setInput] = useState('')
 
-  function add() {
-    const v = input.trim()
-    if (v && !selected.includes(v)) {
-      onChange([...selected, v])
-    }
-    setInput('')
+  const add = path => {
+    if (path && !selected.includes(path) && selected.length < 20)
+      onChange([...selected, path])
   }
-
-  function remove(path) {
-    onChange(selected.filter(p => p !== path))
-  }
-
-  const QUICK = [
-    'Красота и здоровье/Уход за лицом',
-    'Красота и здоровье/Уход за телом',
-    'Красота и здоровье/Уход за волосами',
-    'Красота и здоровье/Декоративная косметика',
-    'Дом и сад/Декор и интерьер',
-    'Спорт и отдых/Спортивное питание',
-  ]
+  const remove = path => onChange(selected.filter(p => p !== path))
 
   return (
-    <div className="space-y-2">
-      <label className="block text-xs font-medium text-gray-600">
-        Категории для анализа * <span className="text-gray-400">(макс. 20)</span>
+    <div>
+      <label style={{ display: 'block', fontSize: '11px', color: D.text2, marginBottom: '10px' }}>
+        Категории для анализа <span style={{ color: D.text3 }}>(макс. 20)</span>
       </label>
 
-      {/* Quick picks */}
-      <div className="flex flex-wrap gap-1.5">
-        {QUICK.map(p => (
-          <button
-            key={p}
-            type="button"
-            onClick={() => !selected.includes(p) && onChange([...selected, p])}
-            className={`text-xs px-2.5 py-1 rounded-full border transition-colors
-              ${selected.includes(p)
-                ? 'bg-blue-50 border-blue-300 text-blue-700 font-medium'
-                : 'border-gray-200 text-gray-500 hover:border-gray-300 hover:text-gray-700'}`}
-          >
-            {p.split('/').pop()}
-          </button>
-        ))}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+        {QUICK_PATHS.map(p => {
+          const active = selected.includes(p)
+          return (
+            <button key={p} type="button" onClick={() => active ? remove(p) : add(p)}
+              style={{
+                fontSize: '12px', padding: '4px 10px', borderRadius: '9999px',
+                cursor: 'pointer', border: `1px solid ${active ? D.accent : D.border}`,
+                background: active ? D.accent + '28' : 'transparent',
+                color: active ? D.accent : D.text2, transition: 'all 0.15s',
+              }}>
+              {p.split('/').pop()}
+            </button>
+          )
+        })}
       </div>
 
-      {/* Manual input */}
-      <div className="flex gap-2">
-        <input
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), add())}
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <input value={input} onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(input.trim()); setInput('') } }}
           placeholder="Красота и здоровье/Парфюмерия"
-          className="input text-xs"
+          style={{
+            flex: 1, background: D.bg2, border: `1px solid ${D.border}`,
+            borderRadius: '8px', color: D.text1, padding: '8px 12px',
+            fontSize: '13px', outline: 'none',
+          }}
         />
-        <button type="button" onClick={add} disabled={!input.trim() || selected.length >= 20}
-          className="btn-secondary text-xs px-3 whitespace-nowrap">
+        <button type="button" onClick={() => { add(input.trim()); setInput('') }}
+          disabled={!input.trim() || selected.length >= 20}
+          style={{
+            padding: '8px 12px', background: D.bg2, border: `1px solid ${D.border}`,
+            borderRadius: '8px', color: D.text2, fontSize: '13px', cursor: 'pointer',
+          }}>
           + Добавить
         </button>
       </div>
 
-      {/* Selected tags */}
       {selected.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 pt-1">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '10px' }}>
           {selected.map(p => (
-            <span key={p} className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-full pl-2.5 pr-1 py-0.5">
-              <span className="truncate max-w-[180px]">{p.split('/').pop()}</span>
-              <button onClick={() => remove(p)} className="rounded-full hover:bg-blue-200 p-0.5">
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/>
-                </svg>
-              </button>
+            <span key={p} style={{
+              display: 'inline-flex', alignItems: 'center', gap: '4px',
+              background: D.accent + '22', border: `1px solid ${D.accent}55`,
+              borderRadius: '9999px', padding: '3px 8px 3px 10px',
+              fontSize: '12px', color: D.accent,
+            }}>
+              <span style={{ maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {p.split('/').pop()}
+              </span>
+              <button onClick={() => remove(p)} style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: D.accent, padding: '0 2px', fontSize: '15px', lineHeight: 1,
+              }}>×</button>
             </span>
           ))}
         </div>
@@ -305,168 +174,424 @@ function PathPicker({ selected, onChange }) {
   )
 }
 
-// ── ProgressBar ────────────────────────────────────────────────────────────
-function ProgressBar({ progress, done }) {
-  const pct = progress.total > 0 ? Math.round(progress.current / progress.total * 100) : 0
+// ── Progress header ───────────────────────────────────────────────────────────
+function ProgressHeader({ progress, done, mpLimitError }) {
+  const fillPct = progress.total > 0 ? Math.round(progress.current / progress.total * 100) : 0
   return (
-    <div className="card p-4 space-y-2.5">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
-          {!done && (
-            <span className="inline-block w-3.5 h-3.5 flex-shrink-0 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-          )}
-          {done && <span className="text-green-500 text-sm flex-shrink-0">✓</span>}
-          <span className="text-sm text-gray-600 truncate">
-            {done
-              ? <span className="text-green-700 font-medium">Анализ завершён</span>
-              : <><span className="text-gray-400">Анализируем:</span> <strong className="text-gray-800">{progress.name}</strong></>
-            }
-          </span>
-        </div>
-        <span className="text-xs tabular-nums text-gray-400 flex-shrink-0 ml-3">
-          {progress.current} / {progress.total}
+    <div style={{ background: D.bg1, border: `1px solid ${D.border}`, borderRadius: '14px', padding: '16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+        <span style={{ fontSize: '13px', color: done ? D.green : D.text2, display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {!done && <span className="animate-spin" style={{ display: 'inline-block', width: '14px', height: '14px', border: `2px solid ${D.accent}`, borderTopColor: 'transparent', borderRadius: '50%' }} />}
+          {done
+            ? '✓ Анализ завершён'
+            : <>Анализируем <strong style={{ color: D.text1 }}>{progress.name}</strong>… {progress.current}/{progress.total}</>
+          }
         </span>
+        <span style={{ fontSize: '13px', fontFamily: 'monospace', color: D.text2 }}>{fillPct}%</span>
       </div>
-
-      <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all duration-500 ease-out ${done ? 'bg-green-500' : 'bg-blue-500'}`}
-          style={{ width: `${pct}%` }}
-        />
+      <div style={{ height: '6px', background: 'rgba(255,255,255,0.06)', borderRadius: '3px', overflow: 'hidden' }}>
+        <div style={{
+          width: `${fillPct}%`, height: '100%', borderRadius: '3px',
+          background: done ? D.green : D.accent, transition: 'width 0.5s ease',
+        }} />
       </div>
-
-      {!done && progress.current > 0 && (
-        <p className="text-xs text-gray-400">
-          Осталось {progress.total - progress.current} кат.
-          {progress.current > 1 && ` · уже готово ${progress.current - 1}`}
-        </p>
+      {mpLimitError && (
+        <div style={{ marginTop: '12px', padding: '8px 12px', background: D.amber + '18', border: `1px solid ${D.amber}44`, borderRadius: '8px', fontSize: '12px', color: D.amber }}>
+          ⚠ Лимит MPStats исчерпан, данные частичные
+        </div>
       )}
     </div>
   )
 }
 
-// ── LimitsStrip ────────────────────────────────────────────────────────────
-function LimitsStrip({ limits }) {
-  if (!limits) return null
+// ── Limits info ───────────────────────────────────────────────────────────────
+function LimitsInfo({ limits }) {
   const { limit, used, available } = limits
-  if (available === -1) return null   // неизвестно — не показываем
-
-  const usedPct  = limit > 0 ? Math.round(used / limit * 100) : 0
-  const low      = available < 50
-  const warn     = available < 200
-
+  const usedPct = limit > 0 ? Math.round(used / limit * 100) : 0
+  const color = available < 50 ? D.red : available < 200 ? D.amber : D.green
   return (
-    <div className={`flex items-center gap-2 text-xs rounded-lg px-3 py-1.5 border
-      ${low  ? 'bg-red-50 border-red-200 text-red-700'
-      : warn ? 'bg-yellow-50 border-yellow-200 text-yellow-700'
-             : 'bg-gray-50 border-gray-200 text-gray-500'}`}>
-      <span className="flex-1">
-        Лимит MPStats: <strong>{limit.toLocaleString('ru')}</strong>
-        {' / использовано: '}<strong>{used.toLocaleString('ru')}</strong>
-        {' / доступно: '}<strong className={low ? 'text-red-600' : warn ? 'text-yellow-600' : ''}>{available.toLocaleString('ru')}</strong>
-      </span>
-      {/* usage bar */}
-      <div className="w-20 h-1.5 bg-gray-200 rounded-full overflow-hidden flex-shrink-0">
-        <div
-          className={`h-full rounded-full ${low ? 'bg-red-500' : warn ? 'bg-yellow-400' : 'bg-green-500'}`}
-          style={{ width: `${usedPct}%` }}
-        />
+    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', fontSize: '12px', color: D.text3 }}>
+      <span>Лимит MPStats: <strong style={{ color: D.text2 }}>{limit.toLocaleString('ru')}</strong></span>
+      <span>использовано: <strong style={{ color: D.text2 }}>{used.toLocaleString('ru')}</strong></span>
+      <span>доступно: <strong style={{ color }}>{available.toLocaleString('ru')}</strong></span>
+      <div style={{ width: '60px', height: '4px', background: 'rgba(255,255,255,0.06)', borderRadius: '2px', overflow: 'hidden' }}>
+        <div style={{ width: `${usedPct}%`, height: '100%', background: color, borderRadius: '2px' }} />
       </div>
-      <span className="tabular-nums">{usedPct}%</span>
     </div>
   )
 }
 
-// ── Page ───────────────────────────────────────────────────────────────────
-const DEFAULT_PATHS = [
-  'Красота и здоровье/Уход за лицом',
-  'Красота и здоровье/Уход за телом',
-]
+// ── Summary strip ─────────────────────────────────────────────────────────────
+function SummaryStrip({ results }) {
+  const green  = results.filter(r => r.color === 'green').length
+  const yellow = results.filter(r => r.color === 'yellow').length
+  const red    = results.filter(r => r.color === 'red').length
+  const avg    = results.length ? Math.round(results.reduce((s, r) => s + r.total_score, 0) / results.length) : 0
 
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
+      {[
+        { label: 'Средний скор', value: avg,    unit: 'из 100', color: D.accent },
+        { label: 'Входить',      value: green,  unit: 'кат.',   color: D.green  },
+        { label: 'Мониторить',   value: yellow, unit: 'кат.',   color: D.amber  },
+        { label: 'Избегать',     value: red,    unit: 'кат.',   color: D.red    },
+      ].map(item => (
+        <div key={item.label} style={{
+          background: D.bg1, border: `1px solid ${D.border}`,
+          borderRadius: '12px', padding: '14px 16px', textAlign: 'center',
+        }}>
+          <p style={{ fontSize: '11px', color: D.text3, marginBottom: '4px' }}>{item.label}</p>
+          <p style={{ fontSize: '26px', fontWeight: 700, color: item.color, fontFamily: 'monospace' }}>{item.value}</p>
+          <p style={{ fontSize: '11px', color: D.text3 }}>{item.unit}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── Score breakdown (left detail card) ────────────────────────────────────────
+function ScoreBreakdown({ result }) {
+  const score = result.total_score
+
+  const components = COMP_KEYS.map(k => {
+    const comp = result.components?.[k.key]
+    return comp ? { ...k, comp } : null
+  }).filter(Boolean)
+
+  const weakest = components.length > 0
+    ? [...components].sort((a, b) => (a.comp.pct ?? 0) - (b.comp.pct ?? 0))[0]
+    : null
+
+  return (
+    <div style={{ background: D.bg1, border: `1px solid ${D.border}`, borderRadius: '12px', padding: '16px' }}>
+      <p style={{ fontSize: '12px', color: D.text2, marginBottom: '14px' }}>
+        Разбор скора{' '}
+        <span style={{ fontSize: '20px', fontWeight: 700, color: D.text1, fontFamily: 'monospace' }}>{score}</span>
+        <span style={{ color: D.text3 }}>/100</span>
+      </p>
+
+      {components.length === 0 && (
+        <p style={{ fontSize: '12px', color: D.text3 }}>Компоненты недоступны</p>
+      )}
+
+      {components.map(({ key, label, weight, comp }) => {
+        const fillPct = comp.pct ?? Math.round((comp.score / comp.max) * 100)
+        const barColor = fillPct > 70 ? D.green : fillPct >= 40 ? D.accent : D.amber
+        return (
+          <div key={key} style={{ marginBottom: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+              <span style={{ fontSize: '12px', color: D.text2 }}>{label}</span>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <span style={{ fontSize: '12px', fontFamily: 'monospace', color: D.text1 }}>
+                  {comp.score}/{comp.max}
+                </span>
+                <span style={{ fontSize: '10px', color: D.text3 }}>вес {weight}%</span>
+              </div>
+            </div>
+            <HBar value={fillPct} height={8} color={barColor} />
+          </div>
+        )
+      })}
+
+      {weakest && (
+        <div style={{
+          marginTop: '14px', paddingTop: '12px', borderTop: `1px solid ${D.border}`,
+          fontSize: '11px', color: D.amber, lineHeight: 1.5,
+        }}>
+          ↓ Слабое место: <strong style={{ color: D.text1 }}>{weakest.label}</strong>
+          {' — '}{weakest.comp.signal || WEAKNESS_HINT[weakest.key] || 'требует внимания'}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Unit economics (right detail card) ────────────────────────────────────────
+function UnitEconCard({ result, budget, costPrice, schema, targetDrr }) {
+  const avg_price = result.metrics?.avg_price || 0
+
+  if (!avg_price) {
+    return (
+      <div style={{
+        background: D.bg1, border: `1px solid ${D.border}`,
+        borderRadius: '12px', padding: '16px',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <p style={{ color: D.text3, fontSize: '13px' }}>Нет данных MPStats</p>
+      </div>
+    )
+  }
+
+  const commission_rate = result.metrics?.commission_rate || 0.15
+  const logistics       = result.metrics?.logistics_cost  || (schema === 'FBO' ? 200 : 80)
+  const commission      = avg_price * commission_rate
+  const ad_spend        = avg_price * (targetDrr / 100)
+  const profit_per_unit = avg_price - commission - logistics - ad_spend - costPrice
+  const margin_pct      = (profit_per_unit / avg_price * 100).toFixed(1)
+  const units           = Math.floor(budget / avg_price)
+  const total_profit    = profit_per_unit * units
+  const isLoss          = profit_per_unit < 0
+
+  const avgRevPerProduct = (result.metrics?.revenue_30d || 0) / Math.max(result.metrics?.total_products || 1, 1)
+  const payback_days = profit_per_unit > 0 && avg_price > 0 && avgRevPerProduct > 0
+    ? Math.round(budget / (profit_per_unit * (avgRevPerProduct / avg_price / 30)))
+    : null
+
+  const rows = [
+    { label: 'Средняя цена в категории',               value: rub(avg_price),        color: D.text1 },
+    { label: `Комиссия Ozon (${(commission_rate * 100).toFixed(0)}%)`, value: `-${rub(commission)}`, color: D.red },
+    { label: `Логистика ${schema}`,                    value: `-${rub(logistics)}`,  color: D.red },
+    { label: `Реклама (ДРР ${targetDrr}%)`,            value: `-${rub(ad_spend)}`,   color: D.accent },
+    { label: 'Себестоимость',                          value: `-${rub(costPrice)}`,  color: D.amber },
+    null,
+    { label: 'Прибыль с единицы',  value: rub(profit_per_unit), color: isLoss ? D.red : D.green, bold: true, large: true },
+    { label: 'Маржа',              value: `${margin_pct}%`,     color: isLoss ? D.red : D.green },
+    { label: 'Партий на бюджет',   value: `${units.toLocaleString('ru')} шт`, color: D.text1 },
+    { label: 'Потенциальная прибыль', value: rub(total_profit), color: isLoss ? D.red : D.green },
+    ...(payback_days != null ? [{ label: 'Окупаемость', value: `${payback_days} дней`, color: D.text2 }] : []),
+  ]
+
+  return (
+    <div style={{ background: D.bg1, border: `1px solid ${D.border}`, borderRadius: '12px', padding: '16px' }}>
+      <p style={{ fontSize: '12px', color: D.text2, marginBottom: '14px' }}>Unit экономика</p>
+
+      {isLoss && (
+        <div style={{
+          padding: '8px 12px', marginBottom: '12px',
+          background: D.red + '18', border: `1px solid ${D.red}44`,
+          borderRadius: '8px', fontSize: '12px', color: D.red,
+        }}>
+          ⚠ Убыточно при текущих параметрах
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '7px' }}>
+        {rows.map((row, i) => {
+          if (!row) return (
+            <hr key={i} style={{ border: 'none', borderTop: `1px solid ${D.border}`, margin: '3px 0' }} />
+          )
+          return (
+            <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' }}>
+              <span style={{ fontSize: '12px', color: D.text3, flexShrink: 0 }}>{row.label}</span>
+              <span style={{
+                fontSize: row.large ? '15px' : '12px', fontFamily: 'monospace',
+                fontWeight: row.bold ? 700 : 400, color: row.color,
+                textAlign: 'right',
+              }}>
+                {row.value}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── Recommendation card (bottom, best category) ───────────────────────────────
+function RecommendationCard({ result, budget, costPrice, schema, targetDrr }) {
+  const navigate = useNavigate()
+
+  const avg_price       = result.metrics?.avg_price || 0
+  const commission_rate = result.metrics?.commission_rate || 0.15
+  const logistics       = result.metrics?.logistics_cost || (schema === 'FBO' ? 200 : 80)
+  const ad_spend        = avg_price * (targetDrr / 100)
+  const profit          = avg_price - avg_price * commission_rate - logistics - ad_spend - costPrice
+  const marginPct       = avg_price > 0 ? profit / avg_price * 100 : 0
+  const score           = result.total_score
+  const name            = result.name.split('/').pop()
+
+  let text
+  if (score > 70 && marginPct > 20)
+    text = `Категория растёт, маржинальность высокая (${marginPct.toFixed(1)}%). Рекомендуем входить в ближайшие 1-2 месяца. ДРР ${targetDrr}% вписывается в юнит-экономику — конкуренция управляема.`
+  else if (score > 70)
+    text = `Категория перспективная, но маржа под давлением (${marginPct.toFixed(1)}%). Входить можно — важно снизить себестоимость или ДРР. Рассмотрите FBO для снижения логистики.`
+  else if (score >= 40)
+    text = `Категория умеренная (скор ${score}/100), входить с осторожностью. Проведите дополнительный анализ конкурентов перед запуском. Маржа ${marginPct.toFixed(1)}%.`
+  else
+    text = `Высокие риски входа: скор ${score}/100 указывает на насыщенный рынок или слабый рост. Рассмотрите альтернативные категории или дождитесь изменения конъюнктуры.`
+
+  const btns = [
+    { label: 'Топ товары →',           onClick: () => navigate(`/categories?path=${encodeURIComponent(result.path)}`) },
+    { label: 'Анализ конкурентов →',   onClick: () => navigate('/brands') },
+    { label: 'Создать гипотезу →',     onClick: () => navigate(`/hypotheses?category=${encodeURIComponent(result.name)}`) },
+  ]
+
+  return (
+    <div style={{
+      background: D.bg1, borderRadius: '14px',
+      border: `1px solid ${D.border}`, borderLeft: `3px solid ${D.green}`,
+      padding: '20px',
+    }}>
+      <h3 style={{ fontSize: '15px', fontWeight: 700, color: D.text1, marginBottom: '8px' }}>
+        ★ Рекомендация: входить в «{name}»
+      </h3>
+      <p style={{ fontSize: '13px', color: D.text2, lineHeight: 1.65, marginBottom: '16px' }}>{text}</p>
+      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+        {btns.map(btn => (
+          <button key={btn.label} onClick={btn.onClick}
+            style={{
+              padding: '8px 16px', background: 'transparent',
+              border: `1px solid ${D.border}`, borderRadius: '8px',
+              color: D.text2, fontSize: '13px', cursor: 'pointer',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = D.accent; e.currentTarget.style.color = D.text1 }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = D.border;  e.currentTarget.style.color = D.text2 }}
+          >
+            {btn.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Category row (comparison bar + expandable detail) ─────────────────────────
+function CategoryRow({ result, isTop, budget, costPrice, schema, targetDrr }) {
+  const [expanded, setExpanded] = useState(false)
+
+  const score    = result.total_score
+  const barColor = score > 70 ? D.green : score >= 40 ? D.accent : D.red
+  const badge    = score > 70
+    ? { label: 'Входить',    color: D.green }
+    : score >= 40
+    ? { label: 'Мониторить', color: D.amber }
+    : { label: 'Избегать',   color: D.red   }
+
+  return (
+    <div style={{ animation: 'fadeUp 0.3s ease both' }}>
+      {/* Summary row */}
+      <button
+        type="button"
+        onClick={() => setExpanded(p => !p)}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: '12px',
+          padding: '12px 16px', cursor: 'pointer', border: 'none',
+          background: expanded ? D.bg2 : 'transparent',
+          textAlign: 'left', transition: 'background 0.2s',
+        }}
+      >
+        {/* Star */}
+        <span style={{ width: '16px', flexShrink: 0, color: '#fbbf24', fontSize: '14px', textAlign: 'center' }}>
+          {isTop ? '★' : ''}
+        </span>
+
+        {/* Name */}
+        <span style={{
+          width: '160px', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap', fontSize: '13px', fontWeight: 500, color: D.text1,
+        }} title={result.name}>
+          {result.name.split('/').pop()}
+        </span>
+
+        {/* Bar */}
+        <div style={{ flex: 1, height: '8px', background: 'rgba(255,255,255,0.06)', borderRadius: '4px', overflow: 'hidden' }}>
+          <div style={{ width: `${score}%`, height: '100%', background: barColor, borderRadius: '4px', transition: 'width 0.8s ease' }} />
+        </div>
+
+        {/* Score number */}
+        <span style={{ width: '36px', flexShrink: 0, textAlign: 'right', fontSize: '16px', fontWeight: 700, color: barColor, fontFamily: 'monospace' }}>
+          {score}
+        </span>
+
+        {/* Badge */}
+        <span style={{
+          flexShrink: 0, fontSize: '11px', fontFamily: 'monospace',
+          padding: '2px 8px', borderRadius: '9999px', whiteSpace: 'nowrap',
+          background: badge.color + '22', color: badge.color, border: `1px solid ${badge.color}55`,
+        }}>
+          {badge.label}
+        </span>
+
+        {/* Chevron */}
+        <svg style={{
+          width: '14px', height: '14px', flexShrink: 0, color: D.text3,
+          transition: 'transform 0.2s', transform: expanded ? 'rotate(180deg)' : 'none',
+        }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
+
+      {/* Expanded detail */}
+      {expanded && (
+        <div style={{
+          borderTop: `1px solid ${D.border}`,
+          background: D.bg2, padding: '16px',
+          display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px',
+        }}>
+          <ScoreBreakdown result={result} />
+          <UnitEconCard
+            result={result} budget={budget} costPrice={costPrice}
+            schema={schema} targetDrr={targetDrr}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
 export default function ScoringPage() {
   const [searchParams, setSearchParams] = useSearchParams()
 
-  const [paths,    setPaths]    = useState(DEFAULT_PATHS)
-  const [budget,   setBudget]   = useState('150000')
-  const [cogs,     setCogs]     = useState('400')
-  const [schema,   setSchema]   = useState('FBO')
-  const [drr,      setDrr]      = useState('10')
-  const [results,  setResults]  = useState([])
-  const [progress, setProgress] = useState(null)   // null | {current, total, name}
-  const [done,     setDone]     = useState(false)
-  const [loading,  setLoading]  = useState(false)
-  const [error,    setError]    = useState(null)
-  const [expanded, setExpanded] = useState({})
-  const [limits,   setLimits]   = useState(null)   // null | {limit, used, available}
-  const abortRef = useRef(null)
+  const [paths,       setPaths]       = useState(DEFAULT_PATHS)
+  const [budget,      setBudget]      = useState('150000')
+  const [cogs,        setCogs]        = useState('400')
+  const [schema,      setSchema]      = useState('FBO')
+  const [drr,         setDrr]         = useState('10')
+  const [results,     setResults]     = useState([])
+  const [progress,    setProgress]    = useState(null)
+  const [done,        setDone]        = useState(false)
+  const [loading,     setLoading]     = useState(false)
+  const [error,       setError]       = useState(null)
+  const [limits,      setLimits]      = useState(null)
+  const [mpLimitError,setMpLimitError]= useState(false)
 
-  // Загрузить лимиты MPStats при монтировании
-  useEffect(() => {
-    fetchLimits().then(setLimits).catch(() => {})
-  }, [])
+  useEffect(() => { fetchLimits().then(setLimits).catch(() => {}) }, [])
 
-  // Добавить категорию из URL-параметра ?path=...
   useEffect(() => {
     const urlPath = searchParams.get('path')
-    if (urlPath && !paths.includes(urlPath)) {
+    if (urlPath && !paths.includes(urlPath))
       setPaths(prev => [urlPath, ...prev.filter(p => p !== urlPath)])
-    }
     if (urlPath) setSearchParams({}, { replace: true })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const toggleExpand = useCallback((path) => {
-    setExpanded(e => ({ ...e, [path]: !e[path] }))
-  }, [])
+  const budgetN = parseInt(budget)  || 0
+  const cogsN   = parseInt(cogs)    || 0
+  const drrN    = parseFloat(drr)   || 0
+
+  const allLoss = useMemo(() => {
+    if (results.length === 0) return false
+    const withData = results.filter(r => (r.metrics?.avg_price || 0) > 0)
+    if (withData.length === 0) return false
+    return withData.every(r => {
+      const p = r.metrics.avg_price
+      return p - p * (r.metrics.commission_rate || 0.15)
+           - (r.metrics.logistics_cost || (schema === 'FBO' ? 200 : 80))
+           - p * (drrN / 100) - cogsN < 0
+    })
+  }, [results, cogsN, schema, drrN])
 
   async function run(e) {
     e.preventDefault()
     if (paths.length === 0) return
-
-    setLoading(true)
-    setError(null)
-    setResults([])
-    setProgress(null)
-    setDone(false)
-    setExpanded({})
+    setLoading(true); setError(null); setResults([])
+    setProgress(null); setDone(false); setMpLimitError(false)
 
     try {
-      const stream = scoreStream({
-        paths,
-        budget_rub:   parseInt(budget)  || 0,
-        avg_cogs_rub: parseInt(cogs)    || 0,
-        schema,
-        target_drr:   parseFloat(drr)   || 0,
-      })
-
+      const stream = scoreStream({ paths, budget_rub: budgetN, avg_cogs_rub: cogsN, schema, target_drr: drrN })
       for await (const ev of stream) {
         if (ev.type === 'limits') {
           setLimits({ limit: ev.limit, used: ev.used, available: ev.available })
-
         } else if (ev.type === 'progress') {
           setProgress({ current: ev.current, total: ev.total, name: ev.name })
-
         } else if (ev.type === 'result') {
-          setResults(prev => {
-            const next = [...prev, ev].sort((a, b) => b.total_score - a.total_score)
-            // Авто-раскрыть первый зелёный результат
-            if (ev.color === 'green') {
-              setExpanded(ex => Object.keys(ex).length === 0 ? { [ev.path]: true } : ex)
-            }
-            return next
-          })
-
-        } else if (ev.type === 'timeout') {
-          setError(ev.message)
+          setResults(prev => [...prev, ev].sort((a, b) => b.total_score - a.total_score))
+        } else if (ev.type === 'timeout' || ev.type === 'error') {
+          if (ev.code === 'limit_exceeded') setMpLimitError(true)
+          else setError(ev.message)
           setDone(true)
-
-        } else if (ev.type === 'error') {
-          if (ev.code === 'limit_exceeded') {
-            setError(`🚫 ${ev.message}`)
-          } else {
-            setError(ev.message)
-          }
-
         } else if (ev.type === 'done') {
           setDone(true)
         }
@@ -479,154 +604,180 @@ export default function ScoringPage() {
   }
 
   const hasResults = results.length > 0
+  const bestResult = results[0]
+  const drrHigh    = drrN > 30
+  const limitsExhausted = limits && limits.available !== -1 && limits.available < 50
 
   return (
-    <div className="max-w-4xl mx-auto space-y-5">
-      {/* Title */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Скоринг категорий</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            Введите параметры вашего бизнеса — алгоритм оценит привлекательность каждой категории
-          </p>
-        </div>
-        {limits && limits.available !== -1 && (
-          <div className="text-right flex-shrink-0">
-            <p className="text-xs text-gray-400">Лимит MPStats</p>
-            <p className={`text-sm font-semibold tabular-nums ${limits.available < 50 ? 'text-red-600' : limits.available < 200 ? 'text-yellow-600' : 'text-green-600'}`}>
-              {limits.available.toLocaleString('ru')} / {limits.limit.toLocaleString('ru')}
+    <div
+      style={{ background: D.bg0, color: D.text1, minHeight: 'calc(100vh - 56px)' }}
+      className="-mx-4 sm:-mx-6 -my-6 px-4 sm:px-6 py-6"
+    >
+      <div style={{ maxWidth: '960px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+
+        {/* Title */}
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '16px' }}>
+          <div>
+            <h1 style={{ fontSize: '22px', fontWeight: 700, color: D.text1 }}>Скоринг категорий</h1>
+            <p style={{ fontSize: '14px', color: D.text2, marginTop: '4px' }}>
+              Введите параметры — алгоритм оценит привлекательность каждой категории по 5 критериям
             </p>
           </div>
-        )}
-      </div>
+          {limits && limits.available !== -1 && (
+            <div style={{ textAlign: 'right', flexShrink: 0 }}>
+              <p style={{ fontSize: '11px', color: D.text3 }}>Лимит MPStats</p>
+              <p style={{ fontSize: '14px', fontWeight: 600, fontFamily: 'monospace', color: limits.available < 50 ? D.red : limits.available < 200 ? D.amber : D.green }}>
+                {limits.available.toLocaleString('ru')} / {limits.limit.toLocaleString('ru')}
+              </p>
+            </div>
+          )}
+        </div>
 
-      {/* Form */}
-      <form onSubmit={run} className="card p-5 space-y-4">
-        <div>
-          <h3 className="text-sm font-semibold text-gray-700 mb-3">Параметры бизнеса</h3>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Бюджет, ₽</label>
-              <input value={budget} onChange={e => setBudget(e.target.value)}
-                type="number" min="0" placeholder="150000" className="input" />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">
-                Себестоимость, ₽ <span className="text-gray-400 font-normal">(за ед.)</span>
-              </label>
-              <input value={cogs} onChange={e => setCogs(e.target.value)}
-                type="number" min="0" placeholder="400" className="input" />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Схема работы</label>
-              <div className="flex rounded-lg border border-gray-300 overflow-hidden">
+        {/* Form */}
+        <form onSubmit={run} style={{ background: D.bg1, border: `1px solid ${D.border}`, borderRadius: '14px', padding: '20px' }}>
+          <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <DarkField label="Бюджет ₽">
+              <DarkInput value={budget} onChange={setBudget} type="number" placeholder="150000" />
+            </DarkField>
+
+            <DarkField label="Себестоимость ₽/ед.">
+              <DarkInput value={cogs} onChange={setCogs} type="number" placeholder="400" />
+            </DarkField>
+
+            <DarkField label="Схема работы">
+              <div style={{ display: 'flex', border: `1px solid ${D.border}`, borderRadius: '8px', overflow: 'hidden' }}>
                 {['FBO', 'FBS'].map(s => (
                   <button key={s} type="button" onClick={() => setSchema(s)}
-                    className={`flex-1 py-2 text-sm font-medium transition-colors
-                      ${schema === s ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
+                    style={{
+                      padding: '8px 18px', fontSize: '13px', fontWeight: 600, cursor: 'pointer', border: 'none',
+                      background: schema === s ? D.accent : 'transparent',
+                      color: schema === s ? 'white' : D.text2,
+                      borderRight: s === 'FBO' ? `1px solid ${D.border}` : 'none',
+                      transition: 'background 0.15s',
+                    }}>
                     {s}
                   </button>
                 ))}
               </div>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">
-                Целевой ДРР, % <span className="text-gray-400 font-normal">(реклама)</span>
-              </label>
-              <input value={drr} onChange={e => setDrr(e.target.value)}
-                type="number" min="0" max="100" step="0.5" placeholder="10" className="input" />
-            </div>
-          </div>
-        </div>
+            </DarkField>
 
-        {cogs && budget && (
-          <div className="bg-gray-50 rounded-lg px-3 py-2 text-xs text-gray-600 flex flex-wrap gap-x-4 gap-y-1">
-            <span>Мин. партия: <strong>{(parseInt(cogs) * 30).toLocaleString('ru')} ₽</strong></span>
-            <span>Бюджет / партия: <strong>{Math.floor(parseInt(budget) / (parseInt(cogs) * 30)) || 0} шт</strong></span>
-            <span className="text-gray-400">Логистика {schema}: <strong>{schema === 'FBO' ? '200' : '80'} ₽/ед</strong></span>
-            <span className="text-gray-400">Комиссия Ozon: <strong>15%</strong></span>
-          </div>
-        )}
+            <DarkField label="Целевой ДРР %">
+              <DarkInput value={drr} onChange={setDrr} type="number" placeholder="10" width="90px" />
+            </DarkField>
 
-        <hr className="border-gray-100" />
-        <PathPicker selected={paths} onChange={setPaths} />
-
-        <LimitsStrip limits={limits} />
-
-        {limits && limits.available !== -1 && limits.available < 50 && (
-          <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-            ⛔ Лимит MPStats исчерпан (доступно {limits.available} запросов). Скоринг недоступен до завтра.
-          </div>
-        )}
-
-        {(() => {
-          const limitsExhausted = limits && limits.available !== -1 && limits.available < 50
-          return (
-            <button type="submit" disabled={loading || paths.length === 0 || limitsExhausted}
-              className="btn-primary w-full justify-center py-2.5 disabled:opacity-50 disabled:cursor-not-allowed">
+            <button type="submit" disabled={loading || paths.length === 0 || !!limitsExhausted}
+              style={{
+                marginLeft: 'auto', alignSelf: 'flex-end',
+                padding: '10px 22px', background: D.accent, border: 'none',
+                borderRadius: '10px', color: 'white', fontSize: '14px',
+                fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+                opacity: (loading || paths.length === 0 || limitsExhausted) ? 0.5 : 1,
+                display: 'flex', alignItems: 'center', gap: '8px',
+              }}>
               {loading
-                ? <><span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"/>
-                    {progress ? `Анализируем ${progress.current}/${progress.total}…` : 'Запускаем…'}</>
-                : `🔍 Рассчитать скор (${paths.length} ${paths.length === 1 ? 'категория' : 'категорий'})`}
+                ? <><span className="animate-spin" style={{ display: 'inline-block', width: '14px', height: '14px', border: '2px solid white', borderTopColor: 'transparent', borderRadius: '50%' }} />Рассчитываем…</>
+                : `Рассчитать скор (${paths.length}) →`}
             </button>
-          )
-        })()}
-      </form>
+          </div>
 
-      {/* Error */}
-      {error && (
-        <div className="card p-4 bg-red-50 border-red-200 text-red-700 text-sm">
-          ⚠️ {error}
-        </div>
-      )}
+          <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: `1px solid ${D.border}` }}>
+            <PathPicker selected={paths} onChange={setPaths} />
+          </div>
 
-      {/* Progress bar — видна пока загружаем */}
-      {progress && (
-        <ProgressBar progress={progress} done={done} />
-      )}
-
-      {/* Empty state — только если ничего нет и не грузим */}
-      {!loading && !hasResults && !error && !progress && (
-        <div className="text-center py-16 text-gray-400">
-          <p className="text-5xl mb-4">🎯</p>
-          <p className="font-medium text-gray-500">Настройте параметры и нажмите «Рассчитать скор»</p>
-          <p className="text-sm mt-1">Алгоритм проверит каждую категорию по 5 критериям</p>
-        </div>
-      )}
-
-      {/* Results — появляются по мере готовности */}
-      {hasResults && (
-        <div className="space-y-4">
-          <SummaryStrip results={results} />
-
-          <div className="flex items-center justify-between">
-            <h2 className="font-semibold text-gray-800">
-              Результаты{' '}
-              <span className="text-gray-400 font-normal text-sm">
-                ({results.length}{loading && progress ? `/${progress.total}` : ''} категорий)
-              </span>
-            </h2>
-            <div className="flex gap-2">
-              <button onClick={() => setExpanded(Object.fromEntries(results.map(r => [r.path, true])))}
-                className="text-xs text-blue-600 hover:underline">Раскрыть все</button>
-              <span className="text-gray-300">|</span>
-              <button onClick={() => setExpanded({})}
-                className="text-xs text-gray-500 hover:underline">Свернуть</button>
+          {limits && limits.available !== -1 && (
+            <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: `1px solid ${D.border}` }}>
+              <LimitsInfo limits={limits} />
             </div>
-          </div>
+          )}
 
-          <div className="space-y-2">
-            {results.map(r => (
-              <CategoryCard
-                key={r.path}
-                result={r}
-                expanded={!!expanded[r.path]}
-                onToggle={() => toggleExpand(r.path)}
-              />
-            ))}
+          {limitsExhausted && (
+            <div style={{ marginTop: '10px', padding: '10px 14px', background: D.red + '18', border: `1px solid ${D.red}44`, borderRadius: '8px', fontSize: '12px', color: D.red }}>
+              ⛔ Лимит MPStats исчерпан (доступно {limits.available} запросов). Скоринг недоступен до завтра.
+            </div>
+          )}
+        </form>
+
+        {/* Error */}
+        {error && (
+          <div style={{ background: D.red + '18', border: `1px solid ${D.red}44`, borderRadius: '10px', padding: '12px 16px', fontSize: '13px', color: D.red }}>
+            ⚠️ {error}
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Progress */}
+        {progress && (
+          <ProgressHeader progress={progress} done={done} mpLimitError={mpLimitError} />
+        )}
+
+        {/* Alerts (after results appear) */}
+        {hasResults && (allLoss || drrHigh) && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {allLoss && (
+              <div style={{ background: D.amber + '18', border: `1px solid ${D.amber}44`, borderRadius: '10px', padding: '12px 16px', fontSize: '13px', color: D.amber }}>
+                ⚠ Себестоимость слишком высокая для этих категорий — попробуйте снизить или выбрать другие категории
+              </div>
+            )}
+            {drrHigh && (
+              <div style={{ background: D.amber + '18', border: `1px solid ${D.amber}44`, borderRadius: '10px', padding: '12px 16px', fontSize: '13px', color: D.amber }}>
+                ⚠ ДРР выше 30% — реклама съест всю маржу
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Empty state */}
+        {!loading && !hasResults && !error && !progress && (
+          <div style={{ textAlign: 'center', padding: '72px 0', color: D.text3 }}>
+            <p style={{ fontSize: '52px', marginBottom: '16px' }}>🎯</p>
+            <p style={{ fontSize: '16px', color: D.text2, fontWeight: 500 }}>Настройте параметры и нажмите «Рассчитать скор»</p>
+            <p style={{ fontSize: '13px', color: D.text3, marginTop: '6px' }}>Алгоритм проверит каждую категорию по 5 критериям</p>
+          </div>
+        )}
+
+        {/* Results */}
+        {hasResults && (
+          <>
+            <SummaryStrip results={results} />
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '14px', fontWeight: 600, color: D.text1 }}>
+                Сравнение категорий{' '}
+                <span style={{ color: D.text3, fontWeight: 400, fontSize: '13px' }}>
+                  ({results.length}{loading && progress ? `/${progress.total}` : ''})
+                </span>
+              </span>
+            </div>
+
+            {/* Comparison bars container */}
+            <div style={{ background: D.bg1, border: `1px solid ${D.border}`, borderRadius: '14px', overflow: 'hidden' }}>
+              {results.map((r, i) => (
+                <React.Fragment key={r.path}>
+                  {i > 0 && <div style={{ height: '1px', background: D.border }} />}
+                  <CategoryRow
+                    result={r}
+                    isTop={i === 0}
+                    budget={budgetN}
+                    costPrice={cogsN}
+                    schema={schema}
+                    targetDrr={drrN}
+                  />
+                </React.Fragment>
+              ))}
+            </div>
+
+            {/* Recommendation — shown after streaming ends */}
+            {done && bestResult && (
+              <RecommendationCard
+                result={bestResult}
+                budget={budgetN}
+                costPrice={cogsN}
+                schema={schema}
+                targetDrr={drrN}
+              />
+            )}
+          </>
+        )}
+      </div>
     </div>
   )
 }
