@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { fetchOzonConfig } from '../api/client'
 
 const NAV = [
@@ -18,12 +18,21 @@ const PAGE_ACTIONS = {
 
 export default function Navbar() {
   const location = useLocation()
-  const [seller, setSeller] = useState(null)
+  const navigate  = useNavigate()
+  const [seller,    setSeller]    = useState(null)
+  const [connected, setConnected] = useState(false)
 
   useEffect(() => {
     fetchOzonConfig()
-      .then(cfg => { if (cfg.connected) setSeller(cfg.seller_name || cfg.client_id || 'Магазин') })
-      .catch(() => {})
+      .then(cfg => {
+        if (cfg.connected) {
+          setSeller(cfg.seller_name || cfg.client_id || 'Мой магазин')
+          setConnected(true)
+        } else {
+          setSeller('Мой магазин')
+        }
+      })
+      .catch(() => { setSeller('Мой магазин') })
   }, [])
 
   const action = PAGE_ACTIONS[location.pathname]
@@ -76,24 +85,50 @@ export default function Navbar() {
 
       {/* Right side */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-        {/* Store pill */}
-        {seller && (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: '7px',
+
+        {/* Store pill — always visible, shows "Мой магазин" until loaded */}
+        <div
+          onClick={() => navigate('/settings')}
+          style={{
+            display: 'flex', alignItems: 'center', gap: '6px',
             background: 'var(--glass)', border: '1px solid var(--glass-border)',
             borderRadius: '20px', padding: '5px 14px',
             fontSize: '13px', color: 'var(--text1)', fontWeight: 500,
-          }}>
-            <span style={{
-              width: '7px', height: '7px', borderRadius: '50%',
-              background: 'var(--green)', display: 'block', flexShrink: 0,
-              animation: 'pulse 2.5s ease-in-out infinite',
-            }} />
-            <span style={{ maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {seller}
-            </span>
-          </div>
-        )}
+            cursor: 'pointer', transition: 'all 0.2s',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--glass-border-md)'; e.currentTarget.style.background = 'var(--glass-md)' }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--glass-border)';    e.currentTarget.style.background = 'var(--glass)'    }}
+        >
+          <span style={{
+            width: '7px', height: '7px', borderRadius: '50%', display: 'block', flexShrink: 0,
+            background: connected ? 'var(--green)' : 'var(--text3)',
+            animation: connected ? 'pulse 2.5s ease-in-out infinite' : 'none',
+          }} />
+          <span style={{ maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {seller ?? 'Мой магазин'}
+          </span>
+        </div>
+
+        {/* Settings button */}
+        <button
+          onClick={() => navigate('/settings')}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '7px 10px', borderRadius: '10px',
+            background: 'var(--glass)', border: '1px solid var(--glass-border)',
+            color: location.pathname === '/settings' ? 'var(--text1)' : 'var(--text2)',
+            cursor: 'pointer', fontSize: '16px', lineHeight: 1,
+            transition: 'all 0.2s', flexShrink: 0,
+          }}
+          onMouseEnter={e => { e.currentTarget.style.color = 'var(--text1)'; e.currentTarget.style.background = 'var(--glass-md)' }}
+          onMouseLeave={e => {
+            e.currentTarget.style.color = location.pathname === '/settings' ? 'var(--text1)' : 'var(--text2)'
+            e.currentTarget.style.background = 'var(--glass)'
+          }}
+          title="Настройки"
+        >
+          ⚙
+        </button>
 
         {/* Contextual action button */}
         {action && (
@@ -103,9 +138,7 @@ export default function Navbar() {
               background: 'var(--blue)', color: 'white', border: 'none',
               borderRadius: '20px', padding: '7px 18px',
               fontSize: '13px', fontWeight: 600, cursor: 'pointer',
-              fontFamily: 'var(--font)',
-              transition: 'filter 0.2s',
-              whiteSpace: 'nowrap',
+              fontFamily: 'var(--font)', transition: 'filter 0.2s', whiteSpace: 'nowrap',
             }}
             onMouseEnter={e => e.currentTarget.style.filter = 'brightness(1.15)'}
             onMouseLeave={e => e.currentTarget.style.filter = 'none'}
