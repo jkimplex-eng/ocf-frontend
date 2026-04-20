@@ -1,5 +1,6 @@
 import React, { useState, useRef, useMemo } from 'react'
-import { fetchPlSummary, fetchCogs, saveCogs } from '../api/client'
+import { BarChart, Bar, XAxis, Cell, ResponsiveContainer, Tooltip } from 'recharts'
+import { fetchPlSummary, saveCogs } from '../api/client'
 import AlertsPanel from '../components/AlertsPanel'
 
 // ── Format ────────────────────────────────────────────────────────────────────
@@ -14,7 +15,7 @@ const pct  = (v, d = 1) => v == null ? '—' : `${Number(v).toFixed(d)}%`
 const num  = v => v == null ? '—' : Number(v).toLocaleString('ru')
 const date = s => s ? s.slice(5).replace('-', '.') : ''
 
-// ── Linear trend (least squares) ──────────────────────────────────────────────
+// ── Linear trend ──────────────────────────────────────────────────────────────
 function linearTrend(data) {
   const n = data.length
   if (n < 2) return { slope: 0, intercept: data[0] ?? 0 }
@@ -29,50 +30,61 @@ function linearTrend(data) {
   return { slope, intercept }
 }
 
-// ── Delta arrow ───────────────────────────────────────────────────────────────
-function Arrow({ v }) {
-  if (v == null) return <span className="text-gray-300">—</span>
-  const up = v >= 0
-  return (
-    <span className={`text-xs font-semibold whitespace-nowrap ${up ? 'text-green-600' : 'text-red-500'}`}>
-      {up ? '▲' : '▼'} {Math.abs(v).toFixed(1)}%
-    </span>
-  )
+// ── Date utils ────────────────────────────────────────────────────────────────
+function isoDate(d) { return d.toISOString().slice(0, 10) }
+function preset(days) {
+  const end   = new Date()
+  const start = new Date(+end - days * 86400_000)
+  return [isoDate(start), isoDate(end)]
+}
+function thisMonth() {
+  const now   = new Date()
+  const start = new Date(now.getFullYear(), now.getMonth(), 1)
+  return [isoDate(start), isoDate(now)]
 }
 
 // ── SKU status ────────────────────────────────────────────────────────────────
 function skuStatus(row) {
   if (!row.cost_per_unit)
-    return { label: 'Нет данных', bg: 'rgba(156,163,175,0.15)', color: '#6b7280', border: '#9ca3af' }
+    return { label: 'Нет данных', bg: 'rgba(255,255,255,0.06)', color: 'var(--text3)', border: 'var(--glass-border)' }
   if (row.profit < 0)
-    return { label: 'Убыточный',  bg: 'rgba(239,68,68,0.12)',   color: '#dc2626', border: '#f87171' }
+    return { label: 'Убыточный', bg: 'rgba(255,69,58,0.1)', color: 'var(--red)', border: 'rgba(255,69,58,0.3)' }
   if (row.margin_pct > 50 && row.units > 50)
-    return { label: 'Звезда',     bg: 'rgba(34,197,94,0.12)',   color: '#16a34a', border: '#4ade80' }
+    return { label: 'Звезда', bg: 'rgba(48,209,88,0.1)', color: 'var(--green)', border: 'rgba(48,209,88,0.3)' }
   if (row.returns != null && row.revenue > 0 && (row.returns / row.revenue) > 0.15)
-    return { label: 'Возвраты',   bg: 'rgba(249,115,22,0.12)',  color: '#ea580c', border: '#fb923c' }
+    return { label: 'Возвраты', bg: 'rgba(255,159,10,0.1)', color: 'var(--amber)', border: 'rgba(255,159,10,0.3)' }
   if (row.margin_pct < 15)
-    return { label: 'Под давлением', bg: 'rgba(234,179,8,0.12)', color: '#ca8a04', border: '#fbbf24' }
+    return { label: 'Под давлением', bg: 'rgba(255,214,10,0.1)', color: 'var(--amber)', border: 'rgba(255,214,10,0.3)' }
   return null
 }
 
 function SkuStatusBadge({ row }) {
   const s = skuStatus(row)
-  if (!s) return <span style={{ fontSize: '10px', color: '#d1d5db', fontFamily: 'monospace' }}>—</span>
+  if (!s) return <span style={{ fontSize: '11px', color: 'var(--text3)' }}>—</span>
   return (
     <span style={{
-      background: s.bg, color: s.color,
-      border: `1px solid ${s.border}`,
-      fontSize: '10px', padding: '1px 5px',
-      borderRadius: '9999px', fontFamily: 'monospace',
-      whiteSpace: 'nowrap', display: 'inline-block',
+      background: s.bg, color: s.color, border: `1px solid ${s.border}`,
+      fontSize: '11px', padding: '2px 8px', borderRadius: '20px',
+      whiteSpace: 'nowrap', display: 'inline-block', fontWeight: 500,
     }}>
       {s.label}
     </span>
   )
 }
 
-// ── KPI strip ─────────────────────────────────────────────────────────────────
-function KpiStrip({ s, prev }) {
+// ── Delta ─────────────────────────────────────────────────────────────────────
+function Delta({ v, isPp }) {
+  if (v == null) return null
+  const up = v >= 0
+  return (
+    <span style={{ fontSize: '12px', fontWeight: 500, color: up ? 'var(--green)' : 'var(--red)' }}>
+      {up ? '▲' : '▼'} {Math.abs(v).toFixed(1)}{isPp ? ' п.п.' : '%'}
+    </span>
+  )
+}
+
+// ── KPI Cards ─────────────────────────────────────────────────────────────────
+function KpiCards({ s, prev }) {
   function deltaRel(cur, prevVal) {
     if (!prev || prevVal == null || prevVal === 0) return null
     return ((cur - prevVal) / Math.abs(prevVal)) * 100
@@ -83,44 +95,199 @@ function KpiStrip({ s, prev }) {
   }
 
   const items = [
-    { label: 'Выручка',   val: rub(s.revenue),    cls: 'text-blue-700',
-      d: deltaRel(s.revenue, prev?.revenue) },
-    { label: 'Комиссия',  val: rub(s.commission),  cls: 'text-gray-700',   d: null },
-    { label: 'Логистика', val: rub(s.logistics),   cls: 'text-gray-700',   d: null },
-    { label: 'Возвраты',  val: rub(s.returns),     cls: 'text-gray-700',   d: null },
-    { label: 'Себест.',   val: rub(-s.cogs),       cls: 'text-gray-700',   d: null },
-    { label: 'Реклама',   val: rub(-s.ad_spend),   cls: 'text-purple-700', d: null },
-    {
-      label: 'Прибыль', val: rub(s.profit),
-      cls:   s.profit >= 0 ? 'text-green-700 font-bold' : 'text-red-600 font-bold',
-      d: deltaRel(s.profit, prev?.profit),
-    },
-    {
-      label: 'Маржа', val: pct(s.margin_pct),
-      cls: s.margin_pct >= 15 ? 'text-green-700' : s.margin_pct >= 0 ? 'text-yellow-700' : 'text-red-600',
-      d: deltaPp(s.margin_pct, prev?.margin_pct), isPp: true,
-    },
-    { label: 'ДРР',    val: pct(s.drr),           cls: 'text-purple-700',
-      d: deltaRel(s.drr, prev?.drr) },
-    { label: 'Продаж', val: num(s.units) + ' шт', cls: 'text-gray-700',
-      d: deltaRel(s.units, prev?.units) },
+    { label: 'Выручка',  value: rub(s.revenue),         delta: deltaRel(s.revenue, prev?.revenue) },
+    { label: 'Прибыль',  value: rub(s.profit),           delta: deltaRel(s.profit, prev?.profit),
+      color: s.profit >= 0 ? 'var(--green)' : 'var(--red)' },
+    { label: 'Маржа',    value: pct(s.margin_pct),       delta: deltaPp(s.margin_pct, prev?.margin_pct),
+      isPp: true, color: 'var(--amber)' },
+    { label: 'Продажи',  value: `${num(s.units)} шт`,    delta: deltaRel(s.units, prev?.units) },
   ]
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-      {items.map(({ label, val, cls, d, isPp }) => (
-        <div key={label} className="card px-3 py-2.5">
-          <p className="text-xs text-gray-400">{label}</p>
-          <p className={`text-sm mt-0.5 tabular-nums ${cls}`}>{val}</p>
-          {d != null && (
-            <div className="mt-0.5">
-              {isPp
-                ? <span className={`text-xs font-semibold ${d >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                    {d >= 0 ? '▲' : '▼'} {Math.abs(d).toFixed(1)} п.п.
-                  </span>
-                : <Arrow v={d} />}
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
+      {items.map(({ label, value, delta, color, isPp }, i) => (
+        <div key={label} className={`apple-card animate animate-${i + 1}`} style={{ padding: '20px' }}>
+          <p style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text2)', marginBottom: '10px' }}>
+            {label}
+          </p>
+          <p style={{
+            fontSize: '28px', fontWeight: 700, letterSpacing: '-1px',
+            color: color || 'var(--text1)', lineHeight: 1,
+          }}>
+            {value}
+          </p>
+          {delta != null && (
+            <div style={{ marginTop: '6px' }}>
+              <Delta v={delta} isPp={isPp} />
             </div>
           )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── Gross Profit Chart ────────────────────────────────────────────────────────
+const CHART_PERIODS = ['7д', '30д', '90д']
+
+function ChartTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null
+  return (
+    <div style={{
+      background: 'var(--bg3)', border: '1px solid var(--glass-border)',
+      borderRadius: '10px', padding: '8px 14px', fontSize: '12px',
+      fontFamily: 'var(--font)',
+    }}>
+      <p style={{ color: 'var(--text2)', marginBottom: '2px' }}>{label}</p>
+      <p style={{ fontWeight: 700, color: 'var(--text1)' }}>{rub(payload[0].value)}</p>
+    </div>
+  )
+}
+
+function GrossProfitChart({ byDay }) {
+  const [period, setPeriod] = useState('30д')
+
+  const days = useMemo(() => {
+    const n = period === '7д' ? 7 : period === '30д' ? 30 : 90
+    return byDay.slice(-n)
+  }, [byDay, period])
+
+  const values   = days.map(d => d.profit || 0)
+  const avg      = values.length ? values.reduce((s, v) => s + v, 0) / values.length : 0
+  const best     = values.length ? Math.max(...values) : 0
+  const worst    = values.length ? Math.min(...values) : 0
+  const trend    = values.length >= 2 ? linearTrend(values) : { slope: 0 }
+  const trendPct = avg !== 0 ? (trend.slope / Math.abs(avg) * 100) : 0
+
+  const getBarColor = v => {
+    if (v > avg) return 'rgba(48,209,88,0.7)'
+    if (v >= 0)  return 'rgba(0,113,227,0.5)'
+    return 'rgba(255,255,255,0.12)'
+  }
+
+  const chartData = days.map(d => ({ day: date(d.date), value: d.profit || 0 }))
+  const xInterval = days.length > 30 ? 13 : days.length > 14 ? 4 : 0
+
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+        <div>
+          <p style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text1)' }}>Прибыль по дням</p>
+          <p style={{ fontSize: '12px', color: 'var(--text2)', marginTop: '2px' }}>
+            {days.length} дней · среднее {rub(avg)}
+          </p>
+        </div>
+        <div style={{ display: 'flex', background: 'var(--bg3)', borderRadius: '10px', padding: '3px', gap: '2px' }}>
+          {CHART_PERIODS.map(p => (
+            <button key={p} onClick={() => setPeriod(p)} style={{
+              padding: '4px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 500,
+              border: 'none', cursor: 'pointer', fontFamily: 'var(--font)',
+              background: period === p ? 'var(--bg4)' : 'transparent',
+              color: period === p ? 'var(--text1)' : 'var(--text2)',
+              transition: 'all 0.2s',
+            }}>{p}</button>
+          ))}
+        </div>
+      </div>
+
+      <ResponsiveContainer width="100%" height={130}>
+        <BarChart data={chartData} barCategoryGap="18%" margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
+          <XAxis
+            dataKey="day"
+            tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 10, fontFamily: 'var(--font)' }}
+            axisLine={false} tickLine={false} interval={xInterval}
+          />
+          <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(255,255,255,0.03)' }} />
+          <Bar dataKey="value" radius={[3, 3, 0, 0]}>
+            {chartData.map((entry, i) => (
+              <Cell key={i} fill={getBarColor(entry.value)} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px',
+        marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--glass-border)',
+      }}>
+        {[
+          { label: 'Лучший день', value: rub(best),  color: 'var(--green)' },
+          { label: 'Среднее',     value: rub(avg),   color: 'var(--text1)' },
+          { label: 'Худший',      value: rub(worst), color: worst < 0 ? 'var(--red)' : 'var(--text1)' },
+          { label: 'Тренд',       value: `${trendPct >= 0 ? '↑' : '↓'} ${Math.abs(trendPct).toFixed(1)}%`,
+            color: trendPct >= 0 ? 'var(--green)' : 'var(--red)' },
+        ].map(({ label, value, color }) => (
+          <div key={label} style={{ textAlign: 'center' }}>
+            <p style={{ fontSize: '11px', color: 'var(--text3)', marginBottom: '4px' }}>{label}</p>
+            <p style={{ fontSize: '13px', fontWeight: 700, color, letterSpacing: '-0.3px' }}>{value}</p>
+          </div>
+        ))}
+      </div>
+    </>
+  )
+}
+
+// ── Decomposition Card ────────────────────────────────────────────────────────
+function DecompositionCard({ s }) {
+  const rows = [
+    { label: 'Выручка',   value: rub(s.revenue),                                       color: 'var(--blue-light)' },
+    { label: 'Комиссия',  value: s.commission  ? `-${rub(s.commission)}`  : '—',       color: 'var(--red)' },
+    { label: 'Логистика', value: s.logistics   ? `-${rub(s.logistics)}`   : '—',       color: 'var(--red)' },
+    { label: 'Возвраты',  value: s.returns     ? `-${rub(s.returns)}`     : '—',       color: 'var(--red)' },
+    { label: 'Реклама',   value: s.ad_spend && Math.abs(s.ad_spend) > 0 ? `-${rub(Math.abs(s.ad_spend))}` : '—', color: 'var(--text2)' },
+    null,
+    { label: 'Прибыль',   value: rub(s.profit), color: s.profit >= 0 ? 'var(--green)' : 'var(--red)', bold: true },
+  ]
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      {rows.map((row, i) => {
+        if (!row) return <hr key={i} style={{ border: 'none', borderTop: '1px solid var(--glass-border)', margin: '4px 0' }} />
+        return (
+          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '13px', color: 'var(--text2)' }}>{row.label}</span>
+            <span style={{
+              fontSize: '13px', fontWeight: row.bold ? 700 : 500, color: row.color,
+              fontFamily: 'monospace', letterSpacing: '-0.3px',
+            }}>{row.value}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Top 3 SKU ─────────────────────────────────────────────────────────────────
+function Top3Sku({ skus }) {
+  const top3 = [...skus]
+    .filter(s => s.cost_per_unit)
+    .sort((a, b) => b.margin_pct - a.margin_pct)
+    .slice(0, 3)
+
+  if (top3.length === 0) return (
+    <p style={{ fontSize: '12px', color: 'var(--text3)', textAlign: 'center', padding: '12px 0' }}>
+      Заполните себестоимость для анализа
+    </p>
+  )
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      {top3.map((sku, i) => (
+        <div key={sku.sku_id} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{
+            width: '20px', height: '20px', borderRadius: '50%', flexShrink: 0,
+            background: 'var(--glass)', border: '1px solid var(--glass-border)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: '10px', color: 'var(--text3)', fontWeight: 600,
+          }}>{i + 1}</span>
+          <span style={{
+            flex: 1, fontSize: '12px', color: 'var(--text1)', fontWeight: 500,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {sku.name || `SKU ${sku.sku_id}`}
+          </span>
+          <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--green)', flexShrink: 0 }}>
+            {pct(sku.margin_pct)}
+          </span>
         </div>
       ))}
     </div>
@@ -146,194 +313,55 @@ function CogsEditor({ skus, onSaved }) {
       setFlash(true)
       setTimeout(() => setFlash(false), 2000)
       onSaved()
-    } finally {
-      setSaving(false)
-    }
+    } finally { setSaving(false) }
   }
 
   if (!skus.length) return (
-    <p className="text-sm text-gray-400 py-4 text-center">
-      Загрузите P&amp;L — SKU из транзакций появятся здесь
+    <p style={{ fontSize: '13px', color: 'var(--text3)', textAlign: 'center', padding: '24px 0' }}>
+      Загрузите P&amp;L — SKU появятся здесь
     </p>
   )
 
   return (
-    <div className="space-y-3">
-      <div className="divide-y divide-gray-100">
+    <div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
         {skus.map(s => (
-          <div key={s.sku_id} className="flex items-center gap-3 py-2">
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium text-gray-800 truncate">{s.name || s.sku_id}</p>
-              <p className="text-xs text-gray-400 font-mono">SKU {s.sku_id}</p>
+          <div key={s.sku_id} style={{
+            display: 'flex', alignItems: 'center', gap: '12px',
+            padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.04)',
+          }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text1)',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {s.name || s.sku_id}
+              </p>
+              <p style={{ fontSize: '11px', color: 'var(--text3)', fontFamily: 'monospace', marginTop: '2px' }}>
+                SKU {s.sku_id}
+              </p>
             </div>
-            <div className="flex items-center gap-1.5 flex-shrink-0">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
               <input type="number" min="0" step="10"
                 value={vals[s.sku_id] ?? 0}
                 onChange={e => setVals(p => ({ ...p, [s.sku_id]: e.target.value }))}
-                className="input text-xs py-1 w-24 text-right"
+                className="input" style={{ width: '96px', textAlign: 'right', padding: '6px 10px', fontSize: '13px' }}
               />
-              <span className="text-xs text-gray-400 w-8">₽/шт</span>
+              <span style={{ fontSize: '12px', color: 'var(--text3)', width: '32px' }}>₽/шт</span>
             </div>
           </div>
         ))}
       </div>
-      <div className="flex items-center justify-between pt-1">
-        <p className="text-xs text-gray-400">После сохранения P&amp;L пересчитается автоматически</p>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '16px', paddingTop: '12px' }}>
+        <p style={{ fontSize: '12px', color: 'var(--text3)' }}>
+          После сохранения P&amp;L пересчитается автоматически
+        </p>
         <button onClick={save} disabled={saving}
-          className={`btn-primary text-xs px-4 py-1.5 disabled:opacity-50 transition-colors
-            ${flash ? 'bg-green-600 hover:bg-green-700' : ''}`}>
+          className="btn-primary"
+          style={{
+            background: flash ? 'var(--green)' : 'var(--blue)',
+            padding: '8px 20px', fontSize: '13px',
+          }}>
           {saving ? 'Сохраняем…' : flash ? '✓ Сохранено' : 'Сохранить'}
         </button>
-      </div>
-    </div>
-  )
-}
-
-// ── Waterfall bar ─────────────────────────────────────────────────────────────
-function WaterfallBar({ s }) {
-  const rev = Math.abs(s.revenue || 0)
-  if (!rev) return null
-
-  const safe = (v, negate = false) => {
-    const n = negate ? -Number(v || 0) : Number(v || 0)
-    return Math.max(0, n)
-  }
-
-  const commPct = safe(s.commission) / rev * 100
-  const logPct  = safe(s.logistics)  / rev * 100
-  const retPct  = safe(s.returns)    / rev * 100
-  const adPct   = safe(s.ad_spend, true) / rev * 100   // ad_spend is negative in data
-  const cogPct  = safe(s.cogs,     true) / rev * 100   // cogs is negative in data
-  const profPct = (s.profit || 0)   / rev * 100
-
-  const segments = [
-    { key: 'commission', label: 'Комиссия', pct: commPct, color: 'rgba(239,68,68,0.7)',   amount: safe(s.commission) },
-    { key: 'logistics',  label: 'Логистика', pct: logPct, color: 'rgba(245,158,11,0.7)',  amount: safe(s.logistics) },
-    { key: 'returns',    label: 'Возвраты',  pct: retPct, color: 'rgba(239,68,68,0.5)',   amount: safe(s.returns) },
-    { key: 'ad_spend',   label: 'Реклама',   pct: adPct,  color: 'rgba(99,102,241,0.7)', amount: safe(s.ad_spend, true) },
-    { key: 'cogs',       label: 'Себест.',   pct: cogPct, color: 'rgba(20,184,166,0.7)', amount: safe(s.cogs, true) },
-    ...(profPct > 0 ? [{
-      key: 'profit', label: 'Прибыль', pct: profPct, color: '#22c55e', amount: s.profit,
-    }] : []),
-  ]
-
-  return (
-    <div className="card p-4">
-      <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
-        Декомпозиция маржи — от выручки к прибыли
-      </h3>
-
-      {/* Bar */}
-      <div style={{ height: '40px', borderRadius: '8px', overflow: 'hidden', background: '#f3f4f6', display: 'flex' }}>
-        {segments.filter(seg => seg.pct > 0).map(seg => (
-          <div key={seg.key}
-            style={{ width: `${Math.min(seg.pct, 100)}%`, background: seg.color, flexShrink: 0 }}
-            title={`${seg.label}: ${seg.pct.toFixed(1)}%`}
-          />
-        ))}
-      </div>
-
-      {/* Labels */}
-      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2.5">
-        <span className="text-xs flex items-center gap-1">
-          <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: '#3b82f6', display: 'inline-block' }} />
-          <span className="text-blue-700 font-medium">Выручка</span>
-          <span className="text-gray-400 font-mono">100%</span>
-          <span className="text-gray-400 font-mono">{rub(s.revenue)}</span>
-        </span>
-        {segments.map(seg => seg.pct > 0.3 && (
-          <span key={seg.key} className="text-xs flex items-center gap-1">
-            <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: seg.color, display: 'inline-block' }} />
-            <span style={{ color: '#374151' }}>{seg.label}</span>
-            <span className="text-gray-500 font-mono">
-              {seg.key === 'profit' ? '+' : '-'}{seg.pct.toFixed(1)}%
-            </span>
-            <span className="text-gray-400 font-mono">{rub(seg.amount)}</span>
-          </span>
-        ))}
-        {profPct <= 0 && (
-          <span className="text-xs flex items-center gap-1 text-red-500">
-            <span style={{ width: '8px', height: '8px', borderRadius: '2px', background: '#ef4444', display: 'inline-block' }} />
-            <span>Прибыль</span>
-            <span className="font-mono">{pct(profPct)}</span>
-            <span className="font-mono">{rub(s.profit)}</span>
-          </span>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ── Insights (comparison) ─────────────────────────────────────────────────────
-function InsightsBlock({ curSummary, prevSummary, curSkus, prevSkus }) {
-  const insights = useMemo(() => {
-    const list = []
-    if (prevSummary.revenue && prevSummary.revenue > 0) {
-      const revCh = (curSummary.revenue - prevSummary.revenue) / prevSummary.revenue * 100
-      if (revCh > 10)  list.push({ type: 'good', text: `Выручка выросла на ${revCh.toFixed(0)}% — сильный рост` })
-      if (revCh < -10) list.push({ type: 'bad',  text: `Выручка упала на ${Math.abs(revCh).toFixed(0)}% — требует внимания` })
-    }
-    if (prevSummary.margin_pct != null) {
-      const diff = curSummary.margin_pct - prevSummary.margin_pct
-      if (diff < -2) list.push({ type: 'warn',
-        text: `Маржа снизилась на ${Math.abs(diff).toFixed(1)} п.п. — рост идёт за счёт низкомаржинальных SKU` })
-    }
-    return list
-  }, [curSummary, prevSummary])
-
-  const skuChanges = useMemo(() => {
-    const prevMap = Object.fromEntries((prevSkus || []).map(s => [s.sku_id, s]))
-    return (curSkus || [])
-      .filter(s => prevMap[s.sku_id] && (prevMap[s.sku_id].revenue || 0) > 0)
-      .map(s => ({
-        ...s,
-        revCh: (s.revenue - prevMap[s.sku_id].revenue) / prevMap[s.sku_id].revenue * 100,
-      }))
-      .sort((a, b) => b.revCh - a.revCh)
-  }, [curSkus, prevSkus])
-
-  const top3up   = skuChanges.slice(0, 3).filter(s => s.revCh > 0)
-  const top3down = skuChanges.slice(-3).reverse().filter(s => s.revCh < 0)
-
-  return (
-    <div className="card p-4 bg-blue-50 border-blue-200">
-      <h3 className="text-sm font-semibold text-blue-800 mb-3">Выводы по сравнению периодов</h3>
-
-      {insights.length === 0 && skuChanges.length === 0 && (
-        <p className="text-xs text-blue-600">Значительных изменений не обнаружено</p>
-      )}
-
-      {insights.map((ins, i) => (
-        <div key={i} className={`text-xs mb-2 flex items-start gap-2
-          ${ins.type === 'good' ? 'text-green-700' : ins.type === 'bad' ? 'text-red-700' : 'text-yellow-700'}`}>
-          <span>{ins.type === 'good' ? '✅' : ins.type === 'bad' ? '🔴' : '⚠️'}</span>
-          <span>{ins.text}</span>
-        </div>
-      ))}
-
-      <div className="grid grid-cols-2 gap-4 mt-3">
-        {top3up.length > 0 && (
-          <div>
-            <p className="text-xs font-semibold text-blue-700 mb-1">Топ-3 по росту выручки</p>
-            {top3up.map(s => (
-              <div key={s.sku_id} className="text-xs flex items-center gap-2 mb-1">
-                <span className="text-green-600 font-mono tabular-nums w-12 text-right">+{s.revCh.toFixed(0)}%</span>
-                <span className="text-gray-700 truncate">{s.name || s.sku_id}</span>
-              </div>
-            ))}
-          </div>
-        )}
-        {top3down.length > 0 && (
-          <div>
-            <p className="text-xs font-semibold text-blue-700 mb-1">Топ-3 по падению выручки</p>
-            {top3down.map(s => (
-              <div key={s.sku_id} className="text-xs flex items-center gap-2 mb-1">
-                <span className="text-red-500 font-mono tabular-nums w-12 text-right">{s.revCh.toFixed(0)}%</span>
-                <span className="text-gray-700 truncate">{s.name || s.sku_id}</span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   )
@@ -348,35 +376,31 @@ function TrendChart({ historical, forecast }) {
   const vR   = maxV - minV || 1
   const total = historical.length + forecast.length
 
-  const xc = i  => PX + (i  / (total - 1 || 1)) * (W - 2 * PX)
-  const yc = v  => PY + (1 - (v - minV) / vR)   * (H - 2 * PY)
+  const xc = i => PX + (i  / (total - 1 || 1)) * (W - 2 * PX)
+  const yc = v => PY + (1 - (v - minV) / vR)   * (H - 2 * PY)
 
-  const histPath = historical
-    .map((v, i) => `${i ? 'L' : 'M'}${xc(i).toFixed(1)},${yc(v).toFixed(1)}`)
-    .join('')
-
+  const histPath = historical.map((v, i) => `${i ? 'L' : 'M'}${xc(i).toFixed(1)},${yc(v).toFixed(1)}`).join('')
   const forecastPath = [
     `M${xc(historical.length - 1).toFixed(1)},${yc(historical.at(-1)).toFixed(1)}`,
     ...forecast.map((v, i) => `L${xc(historical.length + i).toFixed(1)},${yc(v).toFixed(1)}`),
   ].join('')
-
-  const splitX = xc(historical.length - 1)
+  const splitX  = xc(historical.length - 1)
   const areaPath = `${histPath} L${xc(historical.length - 1)},${H - PY} L${PX},${H - PY} Z`
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: '120px' }}>
       <defs>
         <linearGradient id="fg" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%"   stopColor="#3b82f6" stopOpacity="0.15" />
-          <stop offset="100%" stopColor="#3b82f6" stopOpacity="0" />
+          <stop offset="0%"   stopColor="var(--blue)" stopOpacity="0.2" />
+          <stop offset="100%" stopColor="var(--blue)" stopOpacity="0" />
         </linearGradient>
       </defs>
       <path d={areaPath} fill="url(#fg)" />
-      <path d={histPath}     fill="none" stroke="#3b82f6" strokeWidth="1.8" strokeLinejoin="round" />
-      <path d={forecastPath} fill="none" stroke="#3b82f6" strokeWidth="1.8"
+      <path d={histPath}     fill="none" stroke="var(--blue)" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d={forecastPath} fill="none" stroke="var(--blue)" strokeWidth="1.8"
         strokeDasharray="5 4" opacity="0.4" strokeLinejoin="round" />
       <line x1={splitX} y1={PY} x2={splitX} y2={H - PY}
-        stroke="#d1d5db" strokeWidth="1" strokeDasharray="3 3" />
+        stroke="var(--glass-border-md)" strokeWidth="1" strokeDasharray="3 3" />
     </svg>
   )
 }
@@ -384,71 +408,80 @@ function TrendChart({ historical, forecast }) {
 // ── Forecast tab ──────────────────────────────────────────────────────────────
 function ForecastTab({ byDay }) {
   if (!byDay || byDay.length < 3) return (
-    <p className="text-sm text-gray-400 text-center py-6">
-      Недостаточно данных для прогноза — нужно минимум 3 дня
+    <p style={{ fontSize: '13px', color: 'var(--text3)', textAlign: 'center', padding: '32px 0' }}>
+      Недостаточно данных — нужно минимум 3 дня
     </p>
   )
 
-  const revenues = byDay.map(d => d.revenue  || 0)
-  const profits  = byDay.map(d => d.profit   || 0)
+  const revenues = byDay.map(d => d.revenue || 0)
+  const profits  = byDay.map(d => d.profit  || 0)
   const n = revenues.length
 
-  const revTrend    = linearTrend(revenues)
-  const profTrend   = linearTrend(profits)
+  const revTrend  = linearTrend(revenues)
+  const profTrend = linearTrend(profits)
 
-  const fcRevs  = Array.from({ length: 30 }, (_, i) =>
-    Math.max(0, revTrend.intercept  + revTrend.slope  * (n + i)))
-  const fcProfs = Array.from({ length: 30 }, (_, i) =>
-    profTrend.intercept + profTrend.slope * (n + i))
+  const fcRevs  = Array.from({ length: 30 }, (_, i) => Math.max(0, revTrend.intercept  + revTrend.slope  * (n + i)))
+  const fcProfs = Array.from({ length: 30 }, (_, i) => profTrend.intercept + profTrend.slope * (n + i))
 
-  const totalFcRev  = fcRevs.reduce((s, v) => s + v, 0)
+  const totalFcRev  = fcRevs.reduce((s, v)  => s + v, 0)
   const totalFcProf = fcProfs.reduce((s, v) => s + v, 0)
-
-  const avgCur = revenues.reduce((s, v) => s + v, 0) / n
-  const avgFc  = totalFcRev / 30
+  const avgCur      = revenues.reduce((s, v) => s + v, 0) / n
+  const avgFc       = totalFcRev / 30
   const trendChange = avgCur > 0 ? ((avgFc - avgCur) / avgCur * 100) : 0
   const trendDown   = revTrend.slope < 0
 
   return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div className="card p-4">
-          <p className="text-xs text-gray-400">Прогноз выручки (след. 30 дней)</p>
-          <p className="text-lg font-bold text-blue-700 mt-1 tabular-nums">{rub(totalFcRev)}</p>
-          <p className="text-xs text-gray-400 mt-1 tabular-nums">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+        <div className="apple-card" style={{ padding: '20px' }}>
+          <p style={{ fontSize: '12px', color: 'var(--text2)', marginBottom: '8px' }}>
+            Прогноз выручки (след. 30 дней)
+          </p>
+          <p style={{ fontSize: '24px', fontWeight: 700, color: 'var(--blue-light)', letterSpacing: '-0.5px' }}>
+            {rub(totalFcRev)}
+          </p>
+          <p style={{ fontSize: '11px', color: 'var(--text3)', marginTop: '6px' }}>
             ±15%: {rub(totalFcRev * 0.85)} — {rub(totalFcRev * 1.15)}
           </p>
         </div>
-        <div className="card p-4">
-          <p className="text-xs text-gray-400">Прогноз прибыли (след. 30 дней)</p>
-          <p className={`text-lg font-bold mt-1 tabular-nums ${totalFcProf >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+        <div className="apple-card" style={{ padding: '20px' }}>
+          <p style={{ fontSize: '12px', color: 'var(--text2)', marginBottom: '8px' }}>
+            Прогноз прибыли (след. 30 дней)
+          </p>
+          <p style={{
+            fontSize: '24px', fontWeight: 700, letterSpacing: '-0.5px',
+            color: totalFcProf >= 0 ? 'var(--green)' : 'var(--red)',
+          }}>
             {rub(totalFcProf)}
           </p>
         </div>
       </div>
 
-      {trendDown && (
-        <div className="card p-3 bg-red-50 border-red-200 text-red-700 text-xs">
-          ⚠️ Тренд нисходящий — без изменений выручка упадёт на {Math.abs(trendChange).toFixed(0)}% относительно текущего среднего
-        </div>
-      )}
-      {!trendDown && (
-        <div className="card p-3 bg-green-50 border-green-200 text-green-700 text-xs">
-          ✅ Тренд восходящий — при сохранении динамики выручка вырастет на {Math.abs(trendChange).toFixed(0)}%
-        </div>
-      )}
+      <div style={{
+        padding: '12px 16px', borderRadius: '12px', fontSize: '13px',
+        background: trendDown ? 'rgba(255,69,58,0.08)' : 'rgba(48,209,88,0.08)',
+        border: `1px solid ${trendDown ? 'rgba(255,69,58,0.2)' : 'rgba(48,209,88,0.2)'}`,
+        color: trendDown ? 'var(--red)' : 'var(--green)',
+      }}>
+        {trendDown
+          ? `↓ Тренд нисходящий — без изменений выручка упадёт на ${Math.abs(trendChange).toFixed(0)}%`
+          : `↑ Тренд восходящий — при сохранении динамики вырастет на ${Math.abs(trendChange).toFixed(0)}%`
+        }
+      </div>
 
-      <div className="card p-4">
-        <p className="text-xs font-semibold text-gray-500 mb-1">График: факт + прогноз выручки</p>
+      <div className="apple-card" style={{ padding: '20px' }}>
+        <p style={{ fontSize: '12px', color: 'var(--text2)', marginBottom: '12px' }}>
+          График: факт + прогноз выручки
+        </p>
         <TrendChart historical={revenues} forecast={fcRevs} />
-        <div className="flex items-center gap-5 mt-1 text-xs text-gray-400">
-          <span className="flex items-center gap-1.5">
-            <span style={{ display: 'inline-block', width: '18px', height: '2px', background: '#3b82f6' }} />
+        <div style={{ display: 'flex', gap: '20px', marginTop: '8px' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text3)' }}>
+            <span style={{ display: 'inline-block', width: '18px', height: '2px', background: 'var(--blue)' }} />
             Факт
           </span>
-          <span className="flex items-center gap-1.5">
+          <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text3)' }}>
             <span style={{ display: 'inline-block', width: '18px', height: '2px',
-              background: 'repeating-linear-gradient(90deg,#3b82f6 0,#3b82f6 5px,transparent 5px,transparent 9px)',
+              background: 'repeating-linear-gradient(90deg,var(--blue) 0,var(--blue) 5px,transparent 5px,transparent 9px)',
               opacity: 0.5 }} />
             Прогноз
           </span>
@@ -458,7 +491,7 @@ function ForecastTab({ byDay }) {
   )
 }
 
-// ── P&L table (by SKU) ────────────────────────────────────────────────────────
+// ── SKU Table ─────────────────────────────────────────────────────────────────
 const SKU_COLS = [
   { key: 'name',       label: 'Товар',    align: 'left',  fmt: v => v || '—' },
   { key: 'units',      label: 'Продаж',   align: 'right', fmt: num },
@@ -472,10 +505,18 @@ const SKU_COLS = [
 
 const FILTER_OPTS = [
   { id: 'all',      label: 'Все' },
-  { id: 'stars',    label: '🟢 Звёзды' },
-  { id: 'pressure', label: '🟡 Под давлением' },
-  { id: 'loss',     label: '🔴 Убыточные' },
+  { id: 'stars',    label: 'Звёзды' },
+  { id: 'pressure', label: 'Под давлением' },
+  { id: 'loss',     label: 'Убыточные' },
 ]
+
+function rowValueColor(row, key) {
+  if (key === 'profit')
+    return row.profit >= 0 ? 'var(--green)' : 'var(--red)'
+  if (key === 'margin_pct')
+    return row.margin_pct >= 15 ? 'var(--green)' : row.margin_pct >= 0 ? 'var(--amber)' : 'var(--red)'
+  return 'var(--text1)'
+}
 
 function SkuTable({ rows, summary }) {
   const [filter, setFilter] = useState('all')
@@ -492,96 +533,104 @@ function SkuTable({ rows, summary }) {
   }, [rows, filter])
 
   const totals = {
-    name:       'ИТОГО',
-    units:      summary.units,
-    revenue:    summary.revenue,
-    commission: summary.commission,
-    logistics:  summary.logistics,
-    cogs:       -summary.cogs,
-    profit:     summary.profit,
-    margin_pct: summary.margin_pct,
+    name: 'ИТОГО', units: summary.units,
+    revenue: summary.revenue, commission: summary.commission,
+    logistics: summary.logistics, cogs: -summary.cogs,
+    profit: summary.profit, margin_pct: summary.margin_pct,
   }
 
-  function rowCls(row, key) {
-    if (key === 'profit')
-      return row.profit >= 0 ? 'text-green-700 font-medium' : 'text-red-500 font-medium'
-    if (key === 'margin_pct')
-      return row.margin_pct >= 15 ? 'text-green-700' : row.margin_pct >= 0 ? 'text-yellow-700' : 'text-red-500'
-    return 'text-gray-700'
+  const thStyle = {
+    padding: '10px 12px', textAlign: 'left', fontSize: '11px', fontWeight: 600,
+    color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.3px',
+    borderBottom: '1px solid var(--glass-border)', whiteSpace: 'nowrap',
   }
 
   return (
-    <div className="space-y-3">
-      {/* Filter */}
-      <div className="flex items-center gap-2 flex-wrap">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
         {FILTER_OPTS.map(opt => (
-          <button key={opt.id} onClick={() => setFilter(opt.id)}
-            className={`text-xs px-3 py-1 rounded-full border transition-colors
-              ${filter === opt.id
-                ? 'bg-blue-600 text-white border-blue-600'
-                : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'}`}>
+          <button key={opt.id} onClick={() => setFilter(opt.id)} style={{
+            fontSize: '12px', padding: '5px 14px', borderRadius: '20px', cursor: 'pointer',
+            fontFamily: 'var(--font)', fontWeight: 500,
+            background: filter === opt.id ? 'rgba(0,113,227,0.15)' : 'var(--glass)',
+            border: `1px solid ${filter === opt.id ? 'var(--blue)' : 'var(--glass-border)'}`,
+            color: filter === opt.id ? 'var(--blue-light)' : 'var(--text2)',
+            transition: 'all 0.2s',
+          }}>
             {opt.label}
           </button>
         ))}
-        <span className="text-xs text-gray-400 ml-1">
+        <span style={{ fontSize: '12px', color: 'var(--text3)', alignSelf: 'center', marginLeft: '4px' }}>
           {filteredRows.length !== rows.length ? `${filteredRows.length} из ${rows.length}` : `${rows.length} SKU`}
         </span>
       </div>
 
-      {/* Table */}
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
-            <tr className="border-b-2 border-gray-200">
-              <th className="py-2 px-2 text-left font-semibold text-gray-500 whitespace-nowrap">Статус</th>
+            <tr>
+              <th style={{ ...thStyle }}>Статус</th>
               {SKU_COLS.map(c => (
-                <th key={c.key}
-                  className={`py-2 px-2 font-semibold text-gray-500 whitespace-nowrap
-                    ${c.align === 'left' ? 'text-left' : 'text-right'}`}>
+                <th key={c.key} style={{ ...thStyle, textAlign: c.align === 'right' ? 'right' : 'left' }}>
                   {c.label}
                 </th>
               ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-50">
+          <tbody>
             {filteredRows.map(row => (
-              <tr key={row.sku_id} className="hover:bg-gray-50/70 transition-colors">
-                <td className="py-2 px-2 whitespace-nowrap">
+              <tr key={row.sku_id}
+                style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', transition: 'background 0.15s' }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
+                <td style={{ padding: '10px 12px', whiteSpace: 'nowrap' }}>
                   <SkuStatusBadge row={row} />
                 </td>
                 {SKU_COLS.map(c => (
-                  <td key={c.key}
-                    className={`py-2 px-2 tabular-nums whitespace-nowrap
-                      ${c.align === 'right' ? 'text-right' : ''}
-                      ${c.key === 'name' ? 'max-w-[180px]' : ''}
-                      ${rowCls(row, c.key)}`}
-                    title={c.key === 'name' ? row.name : undefined}
-                  >
+                  <td key={c.key} style={{
+                    padding: '10px 12px', fontSize: '13px', whiteSpace: 'nowrap',
+                    textAlign: c.align === 'right' ? 'right' : 'left',
+                    color: rowValueColor(row, c.key),
+                    fontWeight: (c.key === 'profit' || c.key === 'margin_pct') ? 600 : 400,
+                    fontFamily: c.key !== 'name' ? 'monospace' : 'var(--font)',
+                    maxWidth: c.key === 'name' ? '180px' : 'auto',
+                    overflow: c.key === 'name' ? 'hidden' : 'visible',
+                    textOverflow: c.key === 'name' ? 'ellipsis' : 'clip',
+                  }} title={c.key === 'name' ? row.name : undefined}>
                     {c.key === 'name'
-                      ? <span className="block truncate">{c.fmt(row[c.key])}</span>
-                      : c.fmt(row[c.key])}
+                      ? <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {c.fmt(row[c.key])}
+                        </span>
+                      : c.fmt(row[c.key])
+                    }
                   </td>
                 ))}
               </tr>
             ))}
             {filteredRows.length === 0 && (
               <tr>
-                <td colSpan={SKU_COLS.length + 1} className="py-6 text-center text-gray-400">
+                <td colSpan={SKU_COLS.length + 1}
+                  style={{ padding: '32px', textAlign: 'center', fontSize: '13px', color: 'var(--text3)' }}>
                   Нет SKU с таким статусом
                 </td>
               </tr>
             )}
           </tbody>
           <tfoot>
-            <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
-              <td className="py-2.5 px-2 text-gray-300 text-xs font-mono">—</td>
+            <tr style={{ borderTop: '2px solid var(--glass-border)' }}>
+              <td style={{ padding: '10px 12px', fontSize: '12px', color: 'var(--text3)' }}>—</td>
               {SKU_COLS.map(c => (
-                <td key={c.key}
-                  className={`py-2.5 px-2 tabular-nums whitespace-nowrap text-gray-800
-                    ${c.align === 'right' ? 'text-right' : ''}
-                    ${c.key === 'profit' ? (totals.profit >= 0 ? 'text-green-700' : 'text-red-500') : ''}
-                    ${c.key === 'margin_pct' ? (totals.margin_pct >= 15 ? 'text-green-700' : totals.margin_pct >= 0 ? 'text-yellow-700' : 'text-red-500') : ''}`}
-                >
+                <td key={c.key} style={{
+                  padding: '10px 12px', fontSize: '13px', fontWeight: 700, whiteSpace: 'nowrap',
+                  textAlign: c.align === 'right' ? 'right' : 'left',
+                  fontFamily: c.key !== 'name' ? 'monospace' : 'var(--font)',
+                  color: c.key === 'profit'
+                    ? (totals.profit >= 0 ? 'var(--green)' : 'var(--red)')
+                    : c.key === 'margin_pct'
+                    ? (totals.margin_pct >= 15 ? 'var(--green)' : totals.margin_pct >= 0 ? 'var(--amber)' : 'var(--red)')
+                    : 'var(--text1)',
+                }}>
                   {c.fmt(totals[c.key])}
                 </td>
               ))}
@@ -593,36 +642,64 @@ function SkuTable({ rows, summary }) {
   )
 }
 
-// ── Daily table ───────────────────────────────────────────────────────────────
+// ── Daily Table ───────────────────────────────────────────────────────────────
 function DayTable({ rows }) {
+  const headers = ['Дата','Выручка','Комиссия','Логист.','Возвраты','Себест.','Реклама','Прибыль','Маржа','ДРР']
+  const thStyle = {
+    padding: '10px 10px', fontSize: '11px', fontWeight: 600,
+    color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.3px',
+    borderBottom: '1px solid var(--glass-border)', whiteSpace: 'nowrap',
+  }
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs">
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
-          <tr className="border-b-2 border-gray-200">
-            {['Дата','Выручка','Комиссия','Логист.','Возвраты','Себест.','Реклама','Прибыль','Маржа','ДРР','Д/Д','Н/Н'].map(h => (
-              <th key={h} className={`py-2 px-2 font-semibold text-gray-500 whitespace-nowrap ${h === 'Дата' ? 'text-left' : 'text-right'}`}>{h}</th>
+          <tr>
+            {headers.map((h, i) => (
+              <th key={h} style={{ ...thStyle, textAlign: i === 0 ? 'left' : 'right' }}>{h}</th>
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-50">
+        <tbody>
           {rows.map(d => {
-            const pc = d.profit >= 0 ? 'text-green-700' : 'text-red-500'
-            const mc = d.margin_pct >= 15 ? 'text-green-700' : d.margin_pct >= 0 ? 'text-yellow-600' : 'text-red-500'
+            const pColor = d.profit >= 0 ? 'var(--green)' : 'var(--red)'
+            const mColor = d.margin_pct >= 15 ? 'var(--green)' : d.margin_pct >= 0 ? 'var(--amber)' : 'var(--red)'
             return (
-              <tr key={d.date} className="hover:bg-gray-50/70 transition-colors">
-                <td className="py-1.5 px-2 font-mono text-gray-700">{date(d.date)}</td>
-                <td className="py-1.5 px-2 text-right tabular-nums text-blue-700">{rub(d.revenue)}</td>
-                <td className="py-1.5 px-2 text-right tabular-nums text-gray-600">{rub(d.commission)}</td>
-                <td className="py-1.5 px-2 text-right tabular-nums text-gray-600">{rub(d.logistics)}</td>
-                <td className="py-1.5 px-2 text-right tabular-nums text-gray-600">{rub(d.returns)}</td>
-                <td className="py-1.5 px-2 text-right tabular-nums text-gray-600">{rub(-d.cogs)}</td>
-                <td className="py-1.5 px-2 text-right tabular-nums text-purple-700">{d.ad_spend > 0 ? rub(-d.ad_spend) : '—'}</td>
-                <td className={`py-1.5 px-2 text-right tabular-nums font-medium ${pc}`}>{rub(d.profit)}</td>
-                <td className={`py-1.5 px-2 text-right tabular-nums ${mc}`}>{pct(d.margin_pct)}</td>
-                <td className="py-1.5 px-2 text-right tabular-nums text-purple-700">{d.drr > 0 ? pct(d.drr) : '—'}</td>
-                <td className="py-1.5 px-2 text-right"><Arrow v={d.d1d_pct} /></td>
-                <td className="py-1.5 px-2 text-right"><Arrow v={d.w1w_pct} /></td>
+              <tr key={d.date}
+                style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', transition: 'background 0.15s' }}
+                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+              >
+                <td style={{ padding: '8px 10px', fontFamily: 'monospace', fontSize: '13px', color: 'var(--text2)' }}>
+                  {date(d.date)}
+                </td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace', fontSize: '13px', color: 'var(--blue-light)' }}>
+                  {rub(d.revenue)}
+                </td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace', fontSize: '13px', color: 'var(--text2)' }}>
+                  {rub(d.commission)}
+                </td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace', fontSize: '13px', color: 'var(--text2)' }}>
+                  {rub(d.logistics)}
+                </td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace', fontSize: '13px', color: 'var(--text2)' }}>
+                  {rub(d.returns)}
+                </td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace', fontSize: '13px', color: 'var(--text2)' }}>
+                  {rub(-d.cogs)}
+                </td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace', fontSize: '13px', color: 'var(--purple)' }}>
+                  {d.ad_spend > 0 ? rub(-d.ad_spend) : '—'}
+                </td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace', fontSize: '13px', fontWeight: 600, color: pColor }}>
+                  {rub(d.profit)}
+                </td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace', fontSize: '13px', color: mColor }}>
+                  {pct(d.margin_pct)}
+                </td>
+                <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: 'monospace', fontSize: '13px', color: 'var(--purple)' }}>
+                  {d.drr > 0 ? pct(d.drr) : '—'}
+                </td>
               </tr>
             )
           })}
@@ -630,21 +707,6 @@ function DayTable({ rows }) {
       </table>
     </div>
   )
-}
-
-// ── Date presets ──────────────────────────────────────────────────────────────
-function isoDate(d) { return d.toISOString().slice(0, 10) }
-
-function preset(days) {
-  const end   = new Date()
-  const start = new Date(+end - days * 86400_000)
-  return [isoDate(start), isoDate(end)]
-}
-
-function thisMonth() {
-  const now   = new Date()
-  const start = new Date(now.getFullYear(), now.getMonth(), 1)
-  return [isoDate(start), isoDate(now)]
 }
 
 // ── Page ──────────────────────────────────────────────────────────────────────
@@ -660,7 +722,6 @@ export default function PnLPage() {
   const [data,        setData]        = useState(null)
   const [tab,         setTab]         = useState(TABS[0])
 
-  // Comparison
   const [showCompare,    setShowCompare]    = useState(false)
   const [compareFrom,    setCompareFrom]    = useState('')
   const [compareTo,      setCompareTo]      = useState('')
@@ -672,8 +733,7 @@ export default function PnLPage() {
 
   async function load() {
     const id = ++loadRef.current
-    setLoading(true)
-    setError(null)
+    setLoading(true); setError(null)
     try {
       const result = await fetchPlSummary(dateFrom, dateTo, parseFloat(adSpend) || 0)
       if (id === loadRef.current) { setData(result); setTab(TABS[0]) }
@@ -691,16 +751,13 @@ export default function PnLPage() {
     try {
       const result = await fetchPlSummary(compareFrom, compareTo, parseFloat(adSpend) || 0)
       if (id === cmpLoadRef.current) setCompareData(result)
-    } catch {
-      // silently ignore comparison errors
-    } finally {
+    } catch { /* ignore */ } finally {
       if (id === cmpLoadRef.current) setCompareLoading(false)
     }
   }
 
   function applyPreset(days) {
-    const [f, t] = preset(days)
-    setDateFrom(f); setDateTo(t)
+    const [f, t] = preset(days); setDateFrom(f); setDateTo(t)
   }
 
   const presets = [
@@ -714,94 +771,123 @@ export default function PnLPage() {
     sku_id: s.sku_id, name: s.name, cost_per_unit: s.cost_per_unit,
   })) ?? []
 
+  const labelStyle = { fontSize: '12px', fontWeight: 500, color: 'var(--text2)', marginBottom: '8px', display: 'block' }
+  const inputStyle = {
+    background: 'var(--bg3)', border: '1px solid var(--glass-border)',
+    borderRadius: '10px', color: 'var(--text1)', padding: '9px 14px',
+    fontSize: '13px', fontFamily: 'var(--font)', outline: 'none',
+    transition: 'border-color 0.2s, box-shadow 0.2s',
+  }
+
   return (
-    <div className="max-w-6xl mx-auto space-y-5">
-      {/* Title */}
-      <div>
-        <h1 className="text-xl font-bold text-gray-900">P&amp;L калькулятор</h1>
-        <p className="text-sm text-gray-500 mt-0.5">
-          Финансовая аналитика по транзакциям Ozon: выручка, комиссии, логистика, прибыль
-        </p>
-      </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
       {/* Controls */}
-      <div className="card p-4 space-y-3">
-        <div className="flex flex-wrap items-end gap-4">
+      <div className="apple-card animate" style={{ padding: '20px' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '20px' }}>
+
           {/* Presets */}
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium text-gray-500">Быстрый период</p>
-            <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+          <div>
+            <span style={labelStyle}>Быстрый период</span>
+            <div style={{ display: 'flex', background: 'var(--bg3)', borderRadius: '10px', padding: '3px', gap: '2px' }}>
               {presets.map(p => (
-                <button key={p.label} type="button" onClick={p.fn}
-                  className="px-3 py-1.5 text-xs font-medium bg-white text-gray-600
-                    hover:bg-gray-50 border-r border-gray-200 last:border-0 transition-colors">
+                <button key={p.label} type="button" onClick={p.fn} style={{
+                  padding: '6px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 500,
+                  border: 'none', cursor: 'pointer', fontFamily: 'var(--font)',
+                  background: 'transparent', color: 'var(--text2)',
+                  transition: 'all 0.2s',
+                }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg4)'; e.currentTarget.style.color = 'var(--text1)' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text2)' }}
+                >
                   {p.label}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Date inputs */}
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium text-gray-500">Период</p>
-            <div className="flex items-center gap-2 flex-wrap">
-              <input type="date" value={dateFrom}
-                onChange={e => setDateFrom(e.target.value)}
-                className="input text-xs py-1.5 w-32" />
-              <span className="text-gray-400 text-sm">—</span>
-              <input type="date" value={dateTo}
-                onChange={e => setDateTo(e.target.value)}
-                className="input text-xs py-1.5 w-32" />
+          {/* Dates */}
+          <div>
+            <span style={labelStyle}>Период</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                style={{ ...inputStyle, width: '140px' }}
+                onFocus={e => { e.target.style.borderColor = 'var(--blue)'; e.target.style.boxShadow = '0 0 0 3px rgba(0,113,227,0.2)' }}
+                onBlur={e => { e.target.style.borderColor = 'var(--glass-border)'; e.target.style.boxShadow = 'none' }}
+              />
+              <span style={{ color: 'var(--text3)', fontSize: '14px' }}>—</span>
+              <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                style={{ ...inputStyle, width: '140px' }}
+                onFocus={e => { e.target.style.borderColor = 'var(--blue)'; e.target.style.boxShadow = '0 0 0 3px rgba(0,113,227,0.2)' }}
+                onBlur={e => { e.target.style.borderColor = 'var(--glass-border)'; e.target.style.boxShadow = 'none' }}
+              />
               <button
                 onClick={() => { setShowCompare(p => !p); if (showCompare) setCompareData(null) }}
-                className={`btn-secondary text-xs px-3 py-1.5 transition-colors
-                  ${showCompare ? 'bg-blue-50 border-blue-300 text-blue-700' : ''}`}>
-                ⇄ Сравнить период
+                style={{
+                  ...inputStyle, cursor: 'pointer', whiteSpace: 'nowrap',
+                  background: showCompare ? 'rgba(0,113,227,0.15)' : 'var(--glass)',
+                  borderColor: showCompare ? 'var(--blue)' : 'var(--glass-border)',
+                  color: showCompare ? 'var(--blue-light)' : 'var(--text2)',
+                }}>
+                ⇄ Сравнить
               </button>
             </div>
           </div>
 
           {/* Ad spend */}
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium text-gray-500">Реклама за период, ₽</p>
+          <div>
+            <span style={labelStyle}>Реклама ₽</span>
             <input type="number" min="0" step="100" value={adSpend}
               onChange={e => setAdSpend(e.target.value)}
-              className="input text-xs py-1.5 w-32" placeholder="0" />
+              style={{ ...inputStyle, width: '120px' }} placeholder="0"
+              onFocus={e => { e.target.style.borderColor = 'var(--blue)'; e.target.style.boxShadow = '0 0 0 3px rgba(0,113,227,0.2)' }}
+              onBlur={e => { e.target.style.borderColor = 'var(--glass-border)'; e.target.style.boxShadow = 'none' }}
+            />
           </div>
 
-          <button onClick={load} disabled={loading}
-            className="btn-primary px-5 py-2 self-end disabled:opacity-50">
+          <button onClick={load} disabled={loading} className="btn-primary"
+            style={{ alignSelf: 'flex-end', padding: '10px 24px', fontSize: '14px' }}>
             {loading
-              ? <><span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />Загрузка…</>
-              : '📊 Загрузить P&L'}
+              ? <><span style={{
+                  display: 'inline-block', width: '14px', height: '14px',
+                  border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white',
+                  borderRadius: '50%', marginRight: '8px',
+                }} className="animate-spin" />Загрузка…</>
+              : '↓ Загрузить P&L'
+            }
           </button>
         </div>
 
-        {/* Comparison period row */}
+        {/* Compare row */}
         {showCompare && (
-          <div className="flex items-end gap-3 flex-wrap pt-3 border-t border-gray-100">
-            <div className="space-y-1.5">
-              <p className="text-xs font-medium text-gray-500">
-                <span className="inline-block w-2 h-2 rounded-full bg-gray-400 mr-1" />
-                Период сравнения
-              </p>
-              <div className="flex items-center gap-2">
-                <input type="date" value={compareFrom}
-                  onChange={e => setCompareFrom(e.target.value)}
-                  className="input text-xs py-1.5 w-32" />
-                <span className="text-gray-400 text-sm">—</span>
-                <input type="date" value={compareTo}
-                  onChange={e => setCompareTo(e.target.value)}
-                  className="input text-xs py-1.5 w-32" />
+          <div style={{
+            display: 'flex', alignItems: 'flex-end', gap: '16px', flexWrap: 'wrap',
+            marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--glass-border)',
+          }}>
+            <div>
+              <span style={labelStyle}>Период сравнения</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input type="date" value={compareFrom} onChange={e => setCompareFrom(e.target.value)}
+                  style={{ ...inputStyle, width: '140px' }}
+                  onFocus={e => { e.target.style.borderColor = 'var(--blue)'; e.target.style.boxShadow = '0 0 0 3px rgba(0,113,227,0.2)' }}
+                  onBlur={e => { e.target.style.borderColor = 'var(--glass-border)'; e.target.style.boxShadow = 'none' }}
+                />
+                <span style={{ color: 'var(--text3)', fontSize: '14px' }}>—</span>
+                <input type="date" value={compareTo} onChange={e => setCompareTo(e.target.value)}
+                  style={{ ...inputStyle, width: '140px' }}
+                  onFocus={e => { e.target.style.borderColor = 'var(--blue)'; e.target.style.boxShadow = '0 0 0 3px rgba(0,113,227,0.2)' }}
+                  onBlur={e => { e.target.style.borderColor = 'var(--glass-border)'; e.target.style.boxShadow = 'none' }}
+                />
               </div>
             </div>
-            <button onClick={loadCompare}
-              disabled={compareLoading || !compareFrom || !compareTo}
-              className="btn-secondary text-xs px-4 py-1.5 disabled:opacity-50 self-end">
+            <button onClick={loadCompare} disabled={compareLoading || !compareFrom || !compareTo}
+              className="btn-secondary" style={{ alignSelf: 'flex-end' }}>
               {compareLoading ? 'Загрузка…' : 'Загрузить'}
             </button>
             {compareData && (
-              <span className="text-xs text-green-600 self-end pb-1.5">✓ Период загружен</span>
+              <span style={{ fontSize: '12px', color: 'var(--green)', alignSelf: 'flex-end', paddingBottom: '2px' }}>
+                ✓ Загружен
+              </span>
             )}
           </div>
         )}
@@ -809,138 +895,178 @@ export default function PnLPage() {
 
       {/* Error */}
       {error && (
-        <div className="card p-4 bg-red-50 border-red-200 text-red-700 text-sm">
-          ⚠️ {error}
+        <div style={{
+          padding: '14px 18px', borderRadius: '14px', fontSize: '13px', color: 'var(--red)',
+          background: 'rgba(255,69,58,0.08)', border: '1px solid rgba(255,69,58,0.2)',
+        }}>
+          ⚠ {error}
         </div>
       )}
 
-      {/* Empty */}
+      {/* Empty state */}
       {!data && !loading && !error && (
-        <div className="text-center py-16 text-gray-400">
-          <p className="text-5xl mb-4">📊</p>
-          <p className="font-medium text-gray-500">Выберите период и нажмите «Загрузить P&L»</p>
-          <p className="text-sm mt-1">Данные берутся из финансовых транзакций вашего магазина Ozon</p>
+        <div style={{ textAlign: 'center', padding: '80px 0', color: 'var(--text3)' }}>
+          <p style={{ fontSize: '52px', marginBottom: '16px' }}>📊</p>
+          <p style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text2)' }}>
+            Выберите период и нажмите «Загрузить P&L»
+          </p>
+          <p style={{ fontSize: '13px', marginTop: '6px' }}>
+            Данные берутся из транзакций вашего магазина Ozon
+          </p>
         </div>
       )}
 
       {/* Results */}
       {data && (
-        <div className="space-y-4">
+        <>
           {/* Alerts */}
           <AlertsPanel data={data} />
 
-          {/* KPI */}
-          <KpiStrip s={data.summary} prev={compareData?.summary} />
+          {/* 4 KPI cards */}
+          <KpiCards s={data.summary} prev={compareData?.summary} />
 
-          {/* Comparison insights */}
-          {compareData && (
-            <InsightsBlock
-              curSummary={data.summary}
-              prevSummary={compareData.summary}
-              curSkus={data.by_sku}
-              prevSkus={compareData.by_sku}
-            />
-          )}
+          {/* Main 2-column grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '16px' }}>
 
-          {/* Waterfall */}
-          <WaterfallBar s={data.summary} />
+            {/* Left: chart */}
+            <div className="apple-card animate animate-1" style={{ padding: '20px' }}>
+              {data.by_day.length > 0
+                ? <GrossProfitChart byDay={data.by_day} />
+                : <p style={{ fontSize: '13px', color: 'var(--text3)', textAlign: 'center', padding: '40px 0' }}>
+                    Нет данных за период
+                  </p>
+              }
+            </div>
 
-          {/* No data warning */}
+            {/* Right: decomp + top3 */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div className="apple-card animate animate-2" style={{ padding: '20px' }}>
+                <p style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text1)', marginBottom: '16px' }}>
+                  Декомпозиция
+                </p>
+                <DecompositionCard s={data.summary} />
+              </div>
+              <div className="apple-card animate animate-3" style={{ padding: '20px' }}>
+                <p style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text1)', marginBottom: '14px' }}>
+                  Топ-3 SKU по марже
+                </p>
+                <Top3Sku skus={data.by_sku} />
+              </div>
+            </div>
+          </div>
+
+          {/* Warnings */}
           {data.by_day.length === 0 && (
-            <div className="card p-4 bg-yellow-50 border-yellow-200 text-yellow-700 text-sm">
+            <div style={{
+              padding: '12px 16px', borderRadius: '12px', fontSize: '13px',
+              background: 'rgba(255,214,10,0.08)', border: '1px solid rgba(255,214,10,0.2)',
+              color: 'var(--amber)',
+            }}>
               За выбранный период транзакций не найдено. Проверьте даты или подключение магазина.
             </div>
           )}
-
-          {/* SKU with 0 cost warning */}
           {data.by_sku.some(s => !s.cost_per_unit) && (
-            <div className="card p-3 bg-blue-50 border-blue-200 text-blue-700 text-xs flex items-center gap-2">
-              <span>ℹ️</span>
+            <div style={{
+              padding: '12px 16px', borderRadius: '12px', fontSize: '13px', display: 'flex',
+              alignItems: 'center', gap: '8px',
+              background: 'rgba(0,113,227,0.08)', border: '1px solid rgba(0,113,227,0.2)',
+              color: 'var(--blue-light)',
+            }}>
+              <span>ℹ</span>
               <span>
-                Для части SKU не указана себестоимость — прибыль посчитана без неё.
-                Заполните на вкладке{' '}
+                Для части SKU не указана себестоимость.{' '}
                 <button onClick={() => setTab('Себестоимость')}
-                  className="font-semibold underline">Себестоимость</button>.
+                  style={{ background: 'none', border: 'none', cursor: 'pointer',
+                    color: 'var(--blue-light)', fontWeight: 600, fontFamily: 'var(--font)',
+                    fontSize: '13px', textDecoration: 'underline' }}>
+                  Заполнить
+                </button>
               </span>
             </div>
           )}
 
-          {/* Tabs */}
-          <div className="flex gap-0 border-b border-gray-200">
-            {TABS.map(t => (
-              <button key={t} onClick={() => setTab(t)}
-                className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors
-                  ${tab === t
-                    ? 'border-blue-600 text-blue-700'
-                    : 'border-transparent text-gray-500 hover:text-gray-800'}`}>
-                {t}
-                {t === 'P&L по SKU' && data.by_sku.length > 0 &&
-                  <span className="ml-1.5 bg-gray-100 text-gray-500 text-xs px-1.5 py-0.5 rounded-full">
-                    {data.by_sku.length}
-                  </span>}
-                {t === 'По дням' && data.by_day.length > 0 &&
-                  <span className="ml-1.5 bg-gray-100 text-gray-500 text-xs px-1.5 py-0.5 rounded-full">
-                    {data.by_day.length}
-                  </span>}
-              </button>
-            ))}
+          {/* Table section */}
+          <div className="apple-card animate animate-4" style={{ overflow: 'hidden' }}>
+            {/* Tabs */}
+            <div style={{ display: 'flex', borderBottom: '1px solid var(--glass-border)', padding: '0 20px' }}>
+              {TABS.map(t => (
+                <button key={t} onClick={() => setTab(t)} style={{
+                  padding: '14px 16px', fontSize: '13px', fontWeight: 500,
+                  border: 'none', background: 'transparent', cursor: 'pointer',
+                  fontFamily: 'var(--font)', whiteSpace: 'nowrap',
+                  color: tab === t ? 'var(--text1)' : 'var(--text2)',
+                  borderBottom: tab === t ? '2px solid var(--blue)' : '2px solid transparent',
+                  marginBottom: '-1px', transition: 'all 0.2s',
+                }}>
+                  {t}
+                  {(t === 'P&L по SKU' && data.by_sku.length > 0) && (
+                    <span style={{
+                      marginLeft: '6px', fontSize: '10px', fontWeight: 600,
+                      background: 'var(--glass)', border: '1px solid var(--glass-border)',
+                      borderRadius: '10px', padding: '1px 6px', color: 'var(--text3)',
+                    }}>{data.by_sku.length}</span>
+                  )}
+                  {(t === 'По дням' && data.by_day.length > 0) && (
+                    <span style={{
+                      marginLeft: '6px', fontSize: '10px', fontWeight: 600,
+                      background: 'var(--glass)', border: '1px solid var(--glass-border)',
+                      borderRadius: '10px', padding: '1px 6px', color: 'var(--text3)',
+                    }}>{data.by_day.length}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            {/* Tab content */}
+            <div style={{ padding: '20px' }}>
+              {tab === 'P&L по SKU' && (
+                data.by_sku.length === 0
+                  ? <p style={{ fontSize: '13px', color: 'var(--text3)', textAlign: 'center', padding: '32px 0' }}>Нет данных</p>
+                  : <SkuTable rows={data.by_sku} summary={data.summary} />
+              )}
+              {tab === 'По дням' && (
+                data.by_day.length === 0
+                  ? <p style={{ fontSize: '13px', color: 'var(--text3)', textAlign: 'center', padding: '32px 0' }}>Нет данных</p>
+                  : <>
+                      <p style={{ fontSize: '12px', color: 'var(--text3)', marginBottom: '12px' }}>
+                        Д/Д — динамика выручки день к дню
+                      </p>
+                      <DayTable rows={data.by_day} />
+                      <div style={{
+                        display: 'flex', flexWrap: 'wrap', gap: '16px', marginTop: '12px',
+                        paddingTop: '12px', borderTop: '1px solid var(--glass-border)',
+                        fontSize: '13px', fontWeight: 600,
+                      }}>
+                        <span style={{ color: 'var(--text2)' }}>Итого:</span>
+                        <span style={{ color: 'var(--blue-light)' }}>Выручка {rub(data.summary.revenue)}</span>
+                        <span style={{ color: data.summary.profit >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                          Прибыль {rub(data.summary.profit)}
+                        </span>
+                        <span style={{ color: 'var(--amber)' }}>Маржа {pct(data.summary.margin_pct)}</span>
+                      </div>
+                    </>
+              )}
+              {tab === 'Прогноз' && (
+                <div>
+                  <p style={{ fontSize: '13px', color: 'var(--text2)', marginBottom: '16px' }}>
+                    Прогноз на 30 дней{' '}
+                    <span style={{ fontSize: '12px', color: 'var(--text3)' }}>на основе линейного тренда</span>
+                  </p>
+                  <ForecastTab byDay={data.by_day} />
+                </div>
+              )}
+              {tab === 'Себестоимость' && (
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                    <p style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text1)' }}>Себестоимость по SKU</p>
+                    <p style={{ fontSize: '12px', color: 'var(--text3)' }}>{skuEditorList.length} товаров</p>
+                  </div>
+                  <CogsEditor skus={skuEditorList} onSaved={load} />
+                </div>
+              )}
+            </div>
           </div>
-
-          {/* Tab: P&L по SKU */}
-          {tab === 'P&L по SKU' && (
-            <div className="card p-4">
-              {data.by_sku.length === 0
-                ? <p className="text-sm text-gray-400 text-center py-6">Нет данных</p>
-                : <SkuTable rows={data.by_sku} summary={data.summary} />
-              }
-            </div>
-          )}
-
-          {/* Tab: По дням */}
-          {tab === 'По дням' && (
-            <div className="card p-4">
-              {data.by_day.length === 0
-                ? <p className="text-sm text-gray-400 text-center py-6">Нет данных</p>
-                : <>
-                    <p className="text-xs text-gray-400 mb-3">
-                      Д/Д — динамика выручки день к дню;&nbsp; Н/Н — неделя к неделе
-                    </p>
-                    <DayTable rows={data.by_day} />
-                    <div className="border-t-2 border-gray-300 mt-2 pt-2 flex flex-wrap gap-4 text-xs font-semibold text-gray-700">
-                      <span>Итого за период:</span>
-                      <span className="text-blue-700">Выручка {rub(data.summary.revenue)}</span>
-                      <span className={data.summary.profit >= 0 ? 'text-green-700' : 'text-red-500'}>
-                        Прибыль {rub(data.summary.profit)}
-                      </span>
-                      <span>Маржа {pct(data.summary.margin_pct)}</span>
-                    </div>
-                  </>
-              }
-            </div>
-          )}
-
-          {/* Tab: Прогноз */}
-          {tab === 'Прогноз' && (
-            <div className="card p-4">
-              <h3 className="text-sm font-semibold text-gray-700 mb-4">
-                Прогноз на следующие 30 дней
-                <span className="ml-2 text-xs font-normal text-gray-400">на основе линейного тренда</span>
-              </h3>
-              <ForecastTab byDay={data.by_day} />
-            </div>
-          )}
-
-          {/* Tab: Себестоимость */}
-          {tab === 'Себестоимость' && (
-            <div className="card p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-gray-700">Себестоимость по SKU</h3>
-                <p className="text-xs text-gray-400">{skuEditorList.length} товаров</p>
-              </div>
-              <CogsEditor skus={skuEditorList} onSaved={load} />
-            </div>
-          )}
-        </div>
+        </>
       )}
     </div>
   )

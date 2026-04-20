@@ -1,272 +1,229 @@
 import React, { useState, useEffect } from 'react'
 import { fetchOzonConfig, saveOzonConfig, deleteOzonConfig } from '../api/client'
 
-// ── Status badge ────────────────────────────────────────────────────────────
-function StatusBadge({ connected }) {
-  return connected
-    ? <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-green-100 text-green-700">
-        <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-        Подключено
-      </span>
-    : <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-gray-100 text-gray-500">
-        <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
-        Не подключено
-      </span>
+const S = {
+  card: { background: 'var(--glass)', border: '1px solid var(--glass-border)', borderRadius: '18px', padding: '24px' },
+  label: { display: 'block', fontSize: '12px', fontWeight: 500, color: 'var(--text2)', marginBottom: '8px' },
+  hint: { fontSize: '12px', color: 'var(--text3)', marginTop: '6px' },
+  section: { fontSize: '15px', fontWeight: 600, color: 'var(--text1)', marginBottom: '18px' },
 }
 
-// ── Eye icon ────────────────────────────────────────────────────────────────
-function EyeIcon({ open }) {
-  return open
-    ? <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-          d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-          d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
-      </svg>
-    : <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-          d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/>
-      </svg>
-}
-
-// ── Instruction block ────────────────────────────────────────────────────────
-function InstructionSteps() {
+function StatusDot({ connected }) {
   return (
-    <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
-      <h3 className="text-sm font-semibold text-blue-800">Как получить ключи API</h3>
-      <ol className="space-y-2 text-sm text-blue-700">
-        <li className="flex gap-2">
-          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-200 text-blue-800 text-xs font-bold flex items-center justify-center">1</span>
-          <span>Войдите в <strong>личный кабинет Ozon Seller</strong> → меню «Настройки» → «API»</span>
-        </li>
-        <li className="flex gap-2">
-          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-200 text-blue-800 text-xs font-bold flex items-center justify-center">2</span>
-          <span>Скопируйте <strong>Client-ID</strong> — числовой идентификатор магазина</span>
-        </li>
-        <li className="flex gap-2">
-          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-200 text-blue-800 text-xs font-bold flex items-center justify-center">3</span>
-          <span>Создайте новый ключ с типом <strong>«Seller API»</strong> и скопируйте его</span>
-        </li>
-        <li className="flex gap-2">
-          <span className="flex-shrink-0 w-5 h-5 rounded-full bg-blue-200 text-blue-800 text-xs font-bold flex items-center justify-center">4</span>
-          <span>Вставьте оба значения в форму ниже и нажмите «Подключить»</span>
-        </li>
-      </ol>
-      <p className="text-xs text-blue-600 border-t border-blue-200 pt-2 mt-1">
-        Ключи хранятся в базе данных в зашифрованном виде (Fernet AES-128). Никуда не передаются.
-      </p>
-    </div>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '7px',
+      background: connected ? 'rgba(48,209,88,0.12)' : 'rgba(255,255,255,0.06)',
+      border: `1px solid ${connected ? 'rgba(48,209,88,0.3)' : 'var(--glass-border)'}`,
+      borderRadius: '20px', padding: '4px 12px',
+      fontSize: '12px', fontWeight: 600,
+      color: connected ? 'var(--green)' : 'var(--text3)',
+    }}>
+      <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: connected ? 'var(--green)' : 'var(--text3)',
+        display: 'block', flexShrink: 0, animation: connected ? 'pulse 2.5s ease-in-out infinite' : 'none',
+      }} />
+      {connected ? 'Подключено' : 'Не подключено'}
+    </span>
   )
 }
 
-// ── Main page ────────────────────────────────────────────────────────────────
-export default function SettingsPage() {
-  const [config,    setConfig]    = useState(null)   // null = loading
-  const [clientId,  setClientId]  = useState('')
-  const [apiKey,    setApiKey]    = useState('')
-  const [showKey,   setShowKey]   = useState(false)
-  const [saving,    setSaving]    = useState(false)
-  const [error,     setError]     = useState(null)
-  const [success,   setSuccess]   = useState(null)
-  const [disconnecting, setDisconnecting] = useState(false)
+function EyeBtn({ open, onClick }) {
+  return (
+    <button type="button" onClick={onClick} style={{
+      position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)',
+      background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text3)', padding: '4px',
+    }}>
+      {open
+        ? <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+          </svg>
+        : <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/>
+          </svg>
+      }
+    </button>
+  )
+}
 
-  // Загрузить текущий статус
+export default function SettingsPage() {
+  const [config,        setConfig]        = useState(null)
+  const [clientId,      setClientId]      = useState('')
+  const [apiKey,        setApiKey]        = useState('')
+  const [showKey,       setShowKey]       = useState(false)
+  const [saving,        setSaving]        = useState(false)
+  const [disconnecting, setDisconnecting] = useState(false)
+  const [error,         setError]         = useState(null)
+  const [success,       setSuccess]       = useState(null)
+
   useEffect(() => {
     fetchOzonConfig()
-      .then(cfg => {
-        setConfig(cfg)
-        if (cfg.client_id) setClientId(cfg.client_id)
-      })
+      .then(cfg => { setConfig(cfg); if (cfg.client_id) setClientId(cfg.client_id) })
       .catch(() => setConfig({ connected: false, client_id: '', seller_name: '' }))
   }, [])
 
   async function handleSave(e) {
     e.preventDefault()
     if (!clientId.trim() || !apiKey.trim()) return
-
-    setSaving(true)
-    setError(null)
-    setSuccess(null)
-
+    setSaving(true); setError(null); setSuccess(null)
     try {
-      const result = await saveOzonConfig(clientId.trim(), apiKey.trim())
-      setConfig({ connected: true, client_id: result.client_id, seller_name: result.seller_name, updated_at: new Date().toISOString() })
-      setSuccess(result.message || 'Магазин успешно подключён')
-      setApiKey('')   // очистить поле ключа после сохранения
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setSaving(false)
-    }
+      const r = await saveOzonConfig(clientId.trim(), apiKey.trim())
+      setConfig({ connected: true, client_id: r.client_id, seller_name: r.seller_name, updated_at: new Date().toISOString() })
+      setSuccess(r.message || 'Магазин успешно подключён')
+      setApiKey('')
+    } catch (err) { setError(err.message) }
+    finally { setSaving(false) }
   }
 
   async function handleDisconnect() {
-    if (!confirm('Отключить магазин? Сохранённые ключи будут удалены.')) return
-    setDisconnecting(true)
-    setError(null)
-    setSuccess(null)
+    if (!confirm('Отключить магазин? Ключи будут удалены.')) return
+    setDisconnecting(true); setError(null); setSuccess(null)
     try {
       await deleteOzonConfig()
-      setConfig({ connected: false, client_id: '', seller_name: '', updated_at: null })
-      setClientId('')
-      setApiKey('')
-      setSuccess(null)
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setDisconnecting(false)
-    }
+      setConfig({ connected: false, client_id: '', seller_name: '' })
+      setClientId(''); setApiKey('')
+    } catch (err) { setError(err.message) }
+    finally { setDisconnecting(false) }
   }
 
   const isConnected = config?.connected
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
-      {/* Title */}
-      <div>
-        <h1 className="text-xl font-bold text-gray-900">Настройки</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Подключение магазина Ozon для P&amp;L и аналитики</p>
+    <div style={{ maxWidth: '640px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+
+      {/* Header */}
+      <div style={{ marginBottom: '8px' }}>
+        <h1 style={{ fontSize: '24px', fontWeight: 700, color: 'var(--text1)', letterSpacing: '-0.5px' }}>Настройки</h1>
+        <p style={{ fontSize: '14px', color: 'var(--text2)', marginTop: '4px' }}>
+          Подключение магазина Ozon для P&amp;L и аналитики
+        </p>
       </div>
 
       {/* Status card */}
-      <div className="card p-5">
-        <div className="flex items-center justify-between">
+      <div style={S.card}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
-            <h2 className="text-sm font-semibold text-gray-700">Ozon Seller API</h2>
+            <p style={S.section}>Ozon Seller API</p>
             {config === null
-              ? <p className="text-xs text-gray-400 mt-0.5">Загрузка…</p>
+              ? <p style={S.hint}>Загрузка…</p>
               : isConnected
-                ? <>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      Client-ID: <span className="font-mono font-medium text-gray-700">{config.client_id}</span>
-                    </p>
-                    {config.updated_at && (
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        Обновлено: {new Date(config.updated_at).toLocaleString('ru')}
-                      </p>
-                    )}
-                  </>
-                : <p className="text-xs text-gray-400 mt-0.5">Магазин не подключён</p>
+              ? <>
+                  <p style={{ fontSize: '13px', color: 'var(--text2)' }}>
+                    Client-ID: <span style={{ fontFamily: 'monospace', color: 'var(--text1)', fontWeight: 600 }}>{config.client_id}</span>
+                  </p>
+                  {config.updated_at && (
+                    <p style={S.hint}>Обновлено: {new Date(config.updated_at).toLocaleString('ru')}</p>
+                  )}
+                </>
+              : <p style={S.hint}>Магазин не подключён</p>
             }
           </div>
-          <div className="flex items-center gap-3">
-            {config !== null && <StatusBadge connected={isConnected} />}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {config !== null && <StatusDot connected={isConnected} />}
             {isConnected && (
-              <button
-                onClick={handleDisconnect}
-                disabled={disconnecting}
-                className="text-xs text-red-500 hover:text-red-700 hover:underline disabled:opacity-50"
-              >
-                {disconnecting ? 'Отключаем…' : 'Отключить'}
+              <button onClick={handleDisconnect} disabled={disconnecting}
+                style={{ fontSize: '13px', color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font)' }}>
+                {disconnecting ? 'Отключение…' : 'Отключить'}
               </button>
             )}
           </div>
         </div>
       </div>
 
-      {/* Success banner */}
+      {/* Success */}
       {success && (
-        <div className="flex items-center gap-2 bg-green-50 border border-green-200 text-green-700 text-sm rounded-xl px-4 py-3">
-          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7"/>
-          </svg>
-          {success}
+        <div style={{ background: 'rgba(48,209,88,0.1)', border: '1px solid rgba(48,209,88,0.25)', borderRadius: '12px', padding: '12px 16px', fontSize: '13px', color: 'var(--green)' }}>
+          ✓ {success}
         </div>
       )}
 
-      {/* Error banner */}
+      {/* Error */}
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">
-          ⚠️ {error}
+        <div style={{ background: 'rgba(255,69,58,0.1)', border: '1px solid rgba(255,69,58,0.25)', borderRadius: '12px', padding: '12px 16px', fontSize: '13px', color: 'var(--red)' }}>
+          ⚠ {error}
         </div>
       )}
 
       {/* Form */}
-      <form onSubmit={handleSave} className="card p-5 space-y-4">
-        <h2 className="text-sm font-semibold text-gray-700">
-          {isConnected ? 'Обновить ключи' : 'Подключить магазин'}
-        </h2>
+      <form onSubmit={handleSave} style={{ ...S.card, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <p style={S.section}>{isConnected ? 'Обновить ключи' : 'Подключить магазин'}</p>
 
-        {/* Client-ID */}
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">
-            Client-ID <span className="text-red-400">*</span>
-          </label>
-          <input
-            value={clientId}
-            onChange={e => setClientId(e.target.value)}
-            placeholder="12345678"
-            className="input font-mono"
-            autoComplete="off"
-            required
-          />
-          <p className="text-xs text-gray-400 mt-1">Числовой идентификатор из раздела «Настройки → API»</p>
+          <label style={S.label}>Client-ID <span style={{ color: 'var(--red)' }}>*</span></label>
+          <input value={clientId} onChange={e => setClientId(e.target.value)}
+            placeholder="12345678" className="input" style={{ fontFamily: 'monospace' }}
+            autoComplete="off" required />
+          <p style={S.hint}>Числовой идентификатор из раздела «Настройки → API»</p>
         </div>
 
-        {/* API-Key */}
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">
-            API-Key <span className="text-red-400">*</span>
-          </label>
-          <div className="relative">
-            <input
-              value={apiKey}
-              onChange={e => setApiKey(e.target.value)}
+          <label style={S.label}>API-Key <span style={{ color: 'var(--red)' }}>*</span></label>
+          <div style={{ position: 'relative' }}>
+            <input value={apiKey} onChange={e => setApiKey(e.target.value)}
               type={showKey ? 'text' : 'password'}
-              placeholder={isConnected ? '••••••••  (оставьте пустым, чтобы не менять)' : 'Вставьте API-ключ'}
-              className="input font-mono pr-10"
-              autoComplete="new-password"
-              required={!isConnected}
-            />
-            <button
-              type="button"
-              onClick={() => setShowKey(v => !v)}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-              tabIndex={-1}
-            >
-              <EyeIcon open={showKey} />
-            </button>
+              placeholder={isConnected ? '•••••••• (оставьте пустым чтобы не менять)' : 'Вставьте API-ключ'}
+              className="input" style={{ fontFamily: 'monospace', paddingRight: '40px' }}
+              autoComplete="new-password" required={!isConnected} />
+            <EyeBtn open={showKey} onClick={() => setShowKey(v => !v)} />
           </div>
-          <p className="text-xs text-gray-400 mt-1">
+          <p style={S.hint}>
             {isConnected
               ? 'Оставьте поле пустым, чтобы сохранить текущий ключ'
-              : 'Ключ хранится в зашифрованном виде, в ответах API не возвращается'}
+              : 'Ключ хранится в зашифрованном виде'}
           </p>
         </div>
 
-        <button
-          type="submit"
+        <button type="submit"
           disabled={saving || !clientId.trim() || (!apiKey.trim() && !isConnected)}
-          className="btn-primary w-full justify-center py-2.5 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
+          className="btn-primary" style={{ justifyContent: 'center', padding: '12px', borderRadius: '12px' }}>
           {saving
-            ? <><span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"/>Проверяем подключение…</>
+            ? <><span className="animate-spin" style={{ width: '14px', height: '14px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', display: 'inline-block' }} />Проверяем…</>
             : isConnected ? 'Обновить подключение' : 'Подключить магазин'}
         </button>
       </form>
 
       {/* Instructions */}
-      <InstructionSteps />
+      <div style={{ background: 'rgba(0,113,227,0.08)', border: '1px solid rgba(0,113,227,0.2)', borderRadius: '18px', padding: '24px' }}>
+        <p style={{ fontSize: '14px', fontWeight: 600, color: 'var(--blue-light)', marginBottom: '16px' }}>Как получить ключи API</p>
+        <ol style={{ display: 'flex', flexDirection: 'column', gap: '12px', listStyle: 'none', padding: 0, margin: 0 }}>
+          {[
+            'Войдите в личный кабинет Ozon Seller → «Настройки» → «API»',
+            'Скопируйте Client-ID — числовой идентификатор магазина',
+            'Создайте новый ключ с типом «Seller API» и скопируйте его',
+            'Вставьте оба значения в форму выше и нажмите «Подключить»',
+          ].map((text, i) => (
+            <li key={i} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+              <span style={{
+                flexShrink: 0, width: '22px', height: '22px', borderRadius: '50%',
+                background: 'rgba(0,113,227,0.2)', color: 'var(--blue-light)',
+                fontSize: '11px', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>{i + 1}</span>
+              <span style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: text }} />
+            </li>
+          ))}
+        </ol>
+        <p style={{ fontSize: '11px', color: 'var(--text3)', marginTop: '14px', paddingTop: '12px', borderTop: '1px solid rgba(0,113,227,0.15)' }}>
+          Ключи хранятся в зашифрованном виде (Fernet AES-128). Никуда не передаются.
+        </p>
+      </div>
 
-      {/* What's next */}
+      {/* What's available */}
       {isConnected && (
-        <div className="card p-5 space-y-3">
-          <h3 className="text-sm font-semibold text-gray-700">Что доступно после подключения</h3>
-          <ul className="space-y-2">
+        <div style={S.card}>
+          <p style={S.section}>Доступно после подключения</p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             {[
-              { icon: '📊', label: 'P&L калькулятор', desc: 'Выручка, комиссии, логистика, реклама, прибыль по дням' },
-              { icon: '📦', label: 'Аналитика SKU', desc: 'Маржа по каждому товару с учётом реальных данных' },
-              { icon: '📈', label: 'Динамика продаж', desc: 'День к дню и неделя к неделе со стрелками роста' },
+              { icon: '📊', label: 'P&L калькулятор', desc: 'Выручка, комиссии, логистика, реклама, прибыль' },
+              { icon: '📦', label: 'Аналитика SKU', desc: 'Маржа по каждому товару с реальными данными' },
+              { icon: '📈', label: 'Динамика продаж', desc: 'Д/Д и Н/Н с трендами' },
             ].map(({ icon, label, desc }) => (
-              <li key={label} className="flex items-start gap-3">
-                <span className="text-xl flex-shrink-0">{icon}</span>
+              <div key={label} style={{ display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
+                <span style={{ fontSize: '22px', flexShrink: 0 }}>{icon}</span>
                 <div>
-                  <p className="text-sm font-medium text-gray-800">{label}</p>
-                  <p className="text-xs text-gray-500">{desc}</p>
+                  <p style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text1)' }}>{label}</p>
+                  <p style={{ fontSize: '12px', color: 'var(--text3)', marginTop: '2px' }}>{desc}</p>
                 </div>
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
         </div>
       )}
     </div>
