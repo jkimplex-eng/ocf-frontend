@@ -88,3 +88,53 @@ src/
 2. TODO: воронка продаж (FunnelPage.jsx) — данные из Ozon Analytics API
 3. TODO: гипотезы (HypothesesPage.jsx) — трекер тестов
 4. АКТИВНЫЙ БАГ: логистика не показывается — проблема на бэкенде
+
+## Паттерны кода
+
+### Запрос к API
+```javascript
+const API = import.meta.env.VITE_API_URL
+const token = localStorage.getItem('token')
+
+const res = await fetch(`${API}/pl/summary?date_from=${from}&date_to=${to}`, {
+  headers: { 'Authorization': `Bearer ${token}` }
+})
+if (!res.ok) throw new Error(await res.text())
+const data = await res.json()
+```
+
+### Новая страница
+1. Создать src/pages/NewPage.jsx
+2. Добавить роут в App.jsx: `<Route path="/new" element={<NewPage />} />`
+3. Добавить пункт в Navbar.jsx
+
+### Стиль карточки
+```jsx
+<div style={{
+  background: 'var(--glass)',
+  border: '1px solid var(--glass-border)',
+  borderRadius: 18,
+  padding: '20px',
+  backdropFilter: 'blur(10px)'
+}}>
+```
+
+### Форматирование чисел
+```javascript
+// Деньги
+const fmt = (n) => n >= 1e6
+  ? `${(n/1e6).toFixed(1)} млн ₽`
+  : n >= 1e3
+  ? `${Math.round(n/1e3)} тыс ₽`
+  : `${Math.round(n)} ₽`
+
+// Проценты
+const pct = (n) => `${n.toFixed(1)}%`
+```
+
+## Частые ошибки
+- НЕ использовать белые фоны — только var(--bg), var(--bg1) и т.д.
+- НЕ хардкодить URL бэкенда — только через import.meta.env.VITE_API_URL
+- ВСЕГДА проверять npm run build перед push
+- НЕ коммитить папку dist/
+- Числа ВСЕГДА через font-family: var(--font-mono)
