@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { fetchOzonConfig, saveOzonConfig, deleteOzonConfig } from '../api/client'
+import { fetchOzonConfig, saveOzonConfig, deleteOzonConfig, fetchPerfConfig, savePerfConfig, deletePerfConfig } from '../api/client'
 
 const S = {
   card: { background: 'var(--glass)', border: '1px solid var(--glass-border)', borderRadius: '18px', padding: '24px' },
@@ -54,10 +54,23 @@ export default function SettingsPage() {
   const [error,         setError]         = useState(null)
   const [success,       setSuccess]       = useState(null)
 
+  // Performance API state
+  const [perfConfig,        setPerfConfig]        = useState(null)
+  const [perfClientId,      setPerfClientId]      = useState('')
+  const [perfSecret,        setPerfSecret]        = useState('')
+  const [showPerfSecret,    setShowPerfSecret]    = useState(false)
+  const [perfSaving,        setPerfSaving]        = useState(false)
+  const [perfDisconnecting, setPerfDisconnecting] = useState(false)
+  const [perfError,         setPerfError]         = useState(null)
+  const [perfSuccess,       setPerfSuccess]       = useState(null)
+
   useEffect(() => {
     fetchOzonConfig()
       .then(cfg => { setConfig(cfg); if (cfg.client_id) setClientId(cfg.client_id) })
       .catch(() => setConfig({ connected: false, client_id: '', seller_name: '' }))
+    fetchPerfConfig()
+      .then(cfg => { setPerfConfig(cfg); if (cfg.client_id) setPerfClientId(cfg.client_id) })
+      .catch(() => setPerfConfig({ connected: false, client_id: '' }))
   }, [])
 
   async function handleSave(e) {
@@ -84,7 +97,32 @@ export default function SettingsPage() {
     finally { setDisconnecting(false) }
   }
 
-  const isConnected = config?.connected
+  async function handlePerfSave(e) {
+    e.preventDefault()
+    if (!perfClientId.trim() || !perfSecret.trim()) return
+    setPerfSaving(true); setPerfError(null); setPerfSuccess(null)
+    try {
+      const r = await savePerfConfig(perfClientId.trim(), perfSecret.trim())
+      setPerfConfig({ connected: true, client_id: r.client_id })
+      setPerfSuccess('Performance API успешно подключён')
+      setPerfSecret('')
+    } catch (err) { setPerfError(err.message) }
+    finally { setPerfSaving(false) }
+  }
+
+  async function handlePerfDisconnect() {
+    if (!confirm('Отключить Performance API?')) return
+    setPerfDisconnecting(true); setPerfError(null); setPerfSuccess(null)
+    try {
+      await deletePerfConfig()
+      setPerfConfig({ connected: false, client_id: '' })
+      setPerfClientId(''); setPerfSecret('')
+    } catch (err) { setPerfError(err.message) }
+    finally { setPerfDisconnecting(false) }
+  }
+
+  const isConnected     = config?.connected
+  const isPerfConnected = perfConfig?.connected
 
   return (
     <div style={{ maxWidth: '640px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -179,6 +217,105 @@ export default function SettingsPage() {
             : isConnected ? 'Обновить подключение' : 'Подключить магазин'}
         </button>
       </form>
+
+      {/* ── Performance API block ─────────────────────────────────────────── */}
+
+      {/* Perf status card */}
+      <div style={S.card}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <p style={S.section}>Ozon Performance API</p>
+            {perfConfig === null
+              ? <p style={S.hint}>Загрузка…</p>
+              : isPerfConnected
+              ? <p style={{ fontSize: '13px', color: 'var(--text2)' }}>
+                  Client-ID: <span style={{ fontFamily: 'monospace', color: 'var(--text1)', fontWeight: 600 }}>{perfConfig.client_id}</span>
+                </p>
+              : <p style={S.hint}>Реклама не подключена — расходы из Performance API не учитываются</p>
+            }
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {perfConfig !== null && <StatusDot connected={isPerfConnected} />}
+            {isPerfConnected && (
+              <button onClick={handlePerfDisconnect} disabled={perfDisconnecting}
+                style={{ fontSize: '13px', color: 'var(--red)', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font)' }}>
+                {perfDisconnecting ? 'Отключение…' : 'Отключить'}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Perf success */}
+      {perfSuccess && (
+        <div style={{ background: 'rgba(48,209,88,0.1)', border: '1px solid rgba(48,209,88,0.25)', borderRadius: '12px', padding: '12px 16px', fontSize: '13px', color: 'var(--green)' }}>
+          ✓ {perfSuccess}
+        </div>
+      )}
+
+      {/* Perf error */}
+      {perfError && (
+        <div style={{ background: 'rgba(255,69,58,0.1)', border: '1px solid rgba(255,69,58,0.25)', borderRadius: '12px', padding: '12px 16px', fontSize: '13px', color: 'var(--red)' }}>
+          ⚠ {perfError}
+        </div>
+      )}
+
+      {/* Perf form */}
+      <form onSubmit={handlePerfSave} style={{ ...S.card, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <p style={S.section}>{isPerfConnected ? 'Обновить Performance API' : 'Подключить Performance API'}</p>
+
+        <div>
+          <label style={S.label}>Client-ID <span style={{ color: 'var(--red)' }}>*</span></label>
+          <input value={perfClientId} onChange={e => setPerfClientId(e.target.value)}
+            placeholder="12345678" className="input" style={{ fontFamily: 'monospace' }}
+            autoComplete="off" required />
+        </div>
+
+        <div>
+          <label style={S.label}>Client Secret <span style={{ color: 'var(--red)' }}>*</span></label>
+          <div style={{ position: 'relative' }}>
+            <input value={perfSecret} onChange={e => setPerfSecret(e.target.value)}
+              type={showPerfSecret ? 'text' : 'password'}
+              placeholder={isPerfConnected ? '•••••••• (оставьте пустым чтобы не менять)' : 'Вставьте Client Secret'}
+              className="input" style={{ fontFamily: 'monospace', paddingRight: '40px' }}
+              autoComplete="new-password" required />
+            <EyeBtn open={showPerfSecret} onClick={() => setShowPerfSecret(v => !v)} />
+          </div>
+          <p style={S.hint}>Ключ хранится в зашифрованном виде</p>
+        </div>
+
+        <button type="submit"
+          disabled={perfSaving || !perfClientId.trim() || !perfSecret.trim()}
+          className="btn-primary" style={{ justifyContent: 'center', padding: '12px', borderRadius: '12px' }}>
+          {perfSaving
+            ? <><span className="animate-spin" style={{ width: '14px', height: '14px', border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', display: 'inline-block' }} />Проверяем…</>
+            : isPerfConnected ? 'Обновить Performance API' : 'Подключить Performance API'}
+        </button>
+      </form>
+
+      {/* Perf instructions */}
+      <div style={{ background: 'rgba(90,200,250,0.06)', border: '1px solid rgba(90,200,250,0.15)', borderRadius: '18px', padding: '20px' }}>
+        <p style={{ fontSize: '14px', fontWeight: 600, color: 'var(--teal)', marginBottom: '12px' }}>Как получить ключи Performance API</p>
+        <ol style={{ display: 'flex', flexDirection: 'column', gap: '10px', listStyle: 'none', padding: 0, margin: 0 }}>
+          {[
+            'Войдите в личный кабинет Ozon → «Продвижение» → «Performance API»',
+            'Нажмите «Создать клиента» и скопируйте Client-ID',
+            'Скопируйте Client Secret (отображается только при создании)',
+            'Вставьте оба значения в форму выше и нажмите «Подключить»',
+          ].map((text, i) => (
+            <li key={i} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+              <span style={{
+                flexShrink: 0, width: '22px', height: '22px', borderRadius: '50%',
+                background: 'rgba(90,200,250,0.12)', color: 'var(--teal)',
+                fontSize: '11px', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>{i + 1}</span>
+              <span style={{ fontSize: '13px', color: 'var(--text2)', lineHeight: 1.6 }}>{text}</span>
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      {/* ── Ozon Seller API instructions ─────────────────────────────────── */}
 
       {/* Instructions */}
       <div style={{ background: 'rgba(0,113,227,0.08)', border: '1px solid rgba(0,113,227,0.2)', borderRadius: '18px', padding: '24px' }}>

@@ -235,7 +235,7 @@ function DecompositionCard({ s }) {
     { label: 'Комиссия',  value: s.commission  ? `-${rub(s.commission)}`  : '—',       color: 'var(--red)' },
     { label: 'Логистика', value: s.logistics   ? `-${rub(s.logistics)}`   : '—',       color: 'var(--red)' },
     { label: 'Возвраты',  value: s.returns     ? `-${rub(s.returns)}`     : '—',       color: 'var(--red)' },
-    { label: 'Реклама',   value: s.ad_spend && Math.abs(s.ad_spend) > 0 ? `-${rub(Math.abs(s.ad_spend))}` : '—', color: 'var(--text2)' },
+    { label: 'Реклама',   value: s.ad_spend && Math.abs(s.ad_spend) > 0 ? `-${rub(Math.abs(s.ad_spend))}` : '—', color: 'var(--purple)' },
     null,
     { label: 'Прибыль',   value: rub(s.profit), color: s.profit >= 0 ? 'var(--green)' : 'var(--red)', bold: true },
   ]
@@ -1014,7 +1014,6 @@ export default function PnLPage() {
   const [[df, dt]]    = useState(() => preset(30))
   const [dateFrom,    setDateFrom]    = useState(df)
   const [dateTo,      setDateTo]      = useState(dt)
-  const [adSpend,     setAdSpend]     = useState('0')
   const [loading,     setLoading]     = useState(false)
   const [error,       setError]       = useState(null)
   const [data,        setData]        = useState(null)
@@ -1033,7 +1032,7 @@ export default function PnLPage() {
     const id = ++loadRef.current
     setLoading(true); setError(null)
     try {
-      const result = await fetchPlSummary(dateFrom, dateTo, parseFloat(adSpend) || 0)
+      const result = await fetchPlSummary(dateFrom, dateTo)
       if (id === loadRef.current) { setData(result); setTab(TABS[0]) }
     } catch (err) {
       if (id === loadRef.current) setError(err.message)
@@ -1047,7 +1046,7 @@ export default function PnLPage() {
     const id = ++cmpLoadRef.current
     setCompareLoading(true)
     try {
-      const result = await fetchPlSummary(compareFrom, compareTo, parseFloat(adSpend) || 0)
+      const result = await fetchPlSummary(compareFrom, compareTo)
       if (id === cmpLoadRef.current) setCompareData(result)
     } catch { /* ignore */ } finally {
       if (id === cmpLoadRef.current) setCompareLoading(false)
@@ -1132,17 +1131,6 @@ export default function PnLPage() {
             </div>
           </div>
 
-          {/* Ad spend */}
-          <div>
-            <span style={labelStyle}>Реклама ₽</span>
-            <input type="number" min="0" step="100" value={adSpend}
-              onChange={e => setAdSpend(e.target.value)}
-              style={{ ...inputStyle, width: '120px' }} placeholder="0"
-              onFocus={e => { e.target.style.borderColor = 'var(--blue)'; e.target.style.boxShadow = '0 0 0 3px rgba(0,113,227,0.2)' }}
-              onBlur={e => { e.target.style.borderColor = 'var(--glass-border)'; e.target.style.boxShadow = 'none' }}
-            />
-          </div>
-
           <button onClick={load} disabled={loading} className="btn-primary"
             style={{ alignSelf: 'flex-end', padding: '10px 24px', fontSize: '14px' }}>
             {loading
@@ -1218,7 +1206,7 @@ export default function PnLPage() {
       {data && (
         <>
           {/* Alerts */}
-          <AlertsPanel data={data} />
+          <AlertsPanel data={data} perfConnected={data.perf_connected} />
 
           {/* 4 KPI cards */}
           <KpiCards s={data.summary} prev={compareData?.summary} />

@@ -61,9 +61,9 @@ export function fetchLimits() {
 
 // ── P&L ─────────────────────────────────────────────────────────────────────
 
-/** GET /pl/summary?date_from=&date_to=&ad_spend= */
-export function fetchPlSummary(date_from, date_to, ad_spend = 0) {
-  const q = new URLSearchParams({ date_from, date_to, ad_spend })
+/** GET /pl/summary?date_from=&date_to= */
+export function fetchPlSummary(date_from, date_to) {
+  const q = new URLSearchParams({ date_from, date_to })
   return request(`/pl/summary?${q}`)
 }
 
@@ -115,6 +115,25 @@ export function saveOzonConfig(client_id, api_key) {
 /** DELETE /settings/ozon — отключить магазин */
 export function deleteOzonConfig() {
   return request('/settings/ozon', { method: 'DELETE' })
+}
+
+/** GET /settings/performance — статус Performance API */
+export function fetchPerfConfig() {
+  return request('/settings/performance')
+}
+
+/** POST /settings/performance — сохранить Performance API ключи */
+export function savePerfConfig(client_id, client_secret) {
+  return request('/settings/performance', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ client_id, client_secret }),
+  })
+}
+
+/** DELETE /settings/performance — отключить Performance API */
+export function deletePerfConfig() {
+  return request('/settings/performance', { method: 'DELETE' })
 }
 
 /**

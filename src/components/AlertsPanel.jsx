@@ -23,7 +23,7 @@ const TYPE = {
   good:     { icon: '✓', color: 'var(--green)',  bg: 'rgba(48,209,88,0.08)',  border: 'rgba(48,209,88,0.2)'  },
 }
 
-export default function AlertsPanel({ data }) {
+export default function AlertsPanel({ data, perfConnected = false }) {
   const [dismissed, setDismissed] = useState(new Set())
 
   const allAlerts = useMemo(() => {
@@ -39,8 +39,8 @@ export default function AlertsPanel({ data }) {
     if (s.drr > 25)
       list.push({ id: 'drr-high', type: 'critical', text: `ДРР ${pct(s.drr)} превышает норму 25%` })
 
-    if (!s.ad_spend || Math.abs(s.ad_spend) === 0)
-      list.push({ id: 'no-ads', type: 'warn', text: 'Реклама не подключена — данные неполные' })
+    if (!perfConnected && (!s.ad_spend || Math.abs(s.ad_spend) === 0))
+      list.push({ id: 'no-ads', type: 'warn', text: 'Реклама не подключена — подключите Performance API в Настройках' })
 
     const noCogs = skus.filter(r => !r.cost_per_unit)
     if (noCogs.length > 0)
