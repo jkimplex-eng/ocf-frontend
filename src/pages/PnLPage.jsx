@@ -791,14 +791,16 @@ function ForecastTab({ byDay }) {
 
 // ── SKU Table ─────────────────────────────────────────────────────────────────
 const SKU_COLS = [
-  { key: 'name',       label: 'Товар',    align: 'left',  fmt: v => v || '—' },
-  { key: 'units',      label: 'Продаж',   align: 'right', fmt: num },
-  { key: 'revenue',    label: 'Выручка',  align: 'right', fmt: rub },
-  { key: 'commission', label: 'Комиссия', align: 'right', fmt: rub },
-  { key: 'logistics',  label: 'Логист.',  align: 'right', fmt: rub },
-  { key: 'cogs',       label: 'Себест.',  align: 'right', fmt: v => rub(-v) },
-  { key: 'profit',     label: 'Прибыль',  align: 'right', fmt: rub },
-  { key: 'margin_pct', label: 'Маржа',    align: 'right', fmt: pct },
+  { key: 'name',       label: 'Товар',      align: 'left',  fmt: v => v || '—' },
+  { key: 'units',      label: 'Продаж',     align: 'right', fmt: num },
+  { key: 'revenue',    label: 'Выручка',    align: 'right', fmt: rub },
+  { key: 'commission', label: 'Комиссия',   align: 'right', fmt: rub },
+  { key: 'logistics',  label: 'Логист.',    align: 'right', fmt: rub },
+  { key: 'cogs',       label: 'Себест.',    align: 'right', fmt: v => rub(-v) },
+  { key: 'ads',        label: 'Реклама ₽', align: 'right', fmt: v => v > 0 ? `-${rub(v)}` : '—' },
+  { key: 'drr_pct',    label: 'ДРР %',     align: 'right', fmt: v => v != null ? pct(v) : '—' },
+  { key: 'profit',     label: 'Прибыль',   align: 'right', fmt: rub },
+  { key: 'margin_pct', label: 'Маржа',     align: 'right', fmt: pct },
 ]
 
 const FILTER_OPTS = [
@@ -813,27 +815,48 @@ function rowValueColor(row, key) {
     return row.profit >= 0 ? 'var(--green)' : 'var(--red)'
   if (key === 'margin_pct')
     return row.margin_pct >= 15 ? 'var(--green)' : row.margin_pct >= 0 ? 'var(--amber)' : 'var(--red)'
+  if (key === 'drr_pct') {
+    if (row.drr_pct == null || row.drr_pct === 0) return 'var(--text3)'
+    if (row.drr_pct < 10)  return 'var(--green)'
+    if (row.drr_pct <= 20) return 'var(--amber)'
+    return 'var(--red)'
+  }
+  if (key === 'ads') return row.ads > 0 ? 'var(--purple)' : 'var(--text3)'
   return 'var(--text1)'
 }
 
 function SkuTable({ rows, summary }) {
   const [filter, setFilter] = useState('all')
 
+  // Распределить общие рекламные расходы по SKU пропорционально выручке
+  const augmentedRows = useMemo(() => {
+    const adTotal  = summary.ad_spend || 0
+    const revTotal = summary.revenue  || 0
+    return rows.map(row => {
+      const ads     = revTotal > 0 ? adTotal * row.revenue / revTotal : 0
+      const drr_pct = row.revenue > 0 ? ads / row.revenue * 100 : null
+      const profit  = row.profit - ads
+      return { ...row, ads: Math.round(ads), drr_pct: drr_pct != null ? Math.round(drr_pct * 10) / 10 : null, profit }
+    })
+  }, [rows, summary.ad_spend, summary.revenue])
+
   const filteredRows = useMemo(() => {
-    if (filter === 'all') return rows
-    return rows.filter(row => {
+    if (filter === 'all') return augmentedRows
+    return augmentedRows.filter(row => {
       const s = skuStatus(row)
       if (filter === 'stars')    return s?.label === 'Звезда'
       if (filter === 'pressure') return s?.label === 'Под давлением'
       if (filter === 'loss')     return s?.label === 'Убыточный'
       return true
     })
-  }, [rows, filter])
+  }, [augmentedRows, filter])
 
   const totals = {
     name: 'ИТОГО', units: summary.units,
     revenue: summary.revenue, commission: summary.commission,
     logistics: summary.logistics, cogs: -summary.cogs,
+    ads: summary.ad_spend || 0,
+    drr_pct: summary.drr || 0,
     profit: summary.profit, margin_pct: summary.margin_pct,
   }
 
@@ -914,6 +937,7 @@ function SkuTable({ rows, summary }) {
                 </td>
               </tr>
             )}
+
           </tbody>
           <tfoot>
             <tr style={{ borderTop: '2px solid var(--glass-border)' }}>
@@ -927,6 +951,10 @@ function SkuTable({ rows, summary }) {
                     ? (totals.profit >= 0 ? 'var(--green)' : 'var(--red)')
                     : c.key === 'margin_pct'
                     ? (totals.margin_pct >= 15 ? 'var(--green)' : totals.margin_pct >= 0 ? 'var(--amber)' : 'var(--red)')
+                    : c.key === 'ads'
+                    ? (totals.ads > 0 ? 'var(--purple)' : 'var(--text3)')
+                    : c.key === 'drr_pct'
+                    ? (totals.drr_pct < 10 ? 'var(--green)' : totals.drr_pct <= 20 ? 'var(--amber)' : 'var(--red)')
                     : 'var(--text1)',
                 }}>
                   {c.fmt(totals[c.key])}
