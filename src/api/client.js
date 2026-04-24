@@ -1,8 +1,20 @@
 const BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
+function authHeader() {
+  const token = localStorage.getItem('token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
 async function request(path, options = {}) {
-  const res = await fetch(`${BASE}${path}`, options)
+  const res = await fetch(`${BASE}${path}`, {
+    ...options,
+    headers: { ...authHeader(), ...options.headers },
+  })
   if (!res.ok) {
+    if (res.status === 401) {
+      localStorage.removeItem('token')
+      window.location.href = '/login'
+    }
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || `HTTP ${res.status}`)
   }
@@ -23,7 +35,7 @@ export function fetchCategoriesTree(subcategory = '') {
 export async function* scoreStream(body) {
   const res = await fetch(`${BASE}/categories/score/stream`, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
     body:    JSON.stringify(body),
   })
   if (!res.ok) {

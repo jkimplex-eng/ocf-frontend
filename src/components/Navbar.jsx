@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { fetchOzonConfig } from '../api/client'
+import { useAuth } from '../contexts/AuthContext'
 
 const NAV = [
   { to: '/categories', label: 'Категории' },
@@ -19,6 +20,7 @@ const PAGE_ACTIONS = {
 export default function Navbar() {
   const location = useLocation()
   const navigate  = useNavigate()
+  const { logout } = useAuth()
   const [seller,    setSeller]    = useState(null)
   const [connected, setConnected] = useState(false)
 
@@ -128,6 +130,23 @@ export default function Navbar() {
           title="Настройки"
         >
           ⚙
+        </button>
+
+        {/* Logout button */}
+        <button
+          onClick={() => { logout(); navigate('/login', { replace: true }) }}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '7px 10px', borderRadius: '10px',
+            background: 'transparent', border: '1px solid var(--glass-border)',
+            color: 'var(--text3)', cursor: 'pointer', fontSize: '13px',
+            transition: 'all 0.2s', flexShrink: 0, fontFamily: 'var(--font)',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.color = 'var(--red)'; e.currentTarget.style.borderColor = 'rgba(255,69,58,0.4)' }}
+          onMouseLeave={e => { e.currentTarget.style.color = 'var(--text3)'; e.currentTarget.style.borderColor = 'var(--glass-border)' }}
+          title="Выйти"
+        >
+          Выйти
         </button>
 
         {/* Contextual action button */}
