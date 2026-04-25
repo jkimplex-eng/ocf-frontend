@@ -148,6 +148,14 @@ export function deletePerfConfig() {
   return request('/settings/performance', { method: 'DELETE' })
 }
 
+// ── Funnel ───────────────────────────────────────────────────────────────────
+
+/** GET /funnel/summary?date_from=&date_to= */
+export function fetchFunnelSummary(date_from, date_to) {
+  const q = new URLSearchParams({ date_from, date_to })
+  return request(`/funnel/summary?${q}`)
+}
+
 /**
  * GET /brands/{brand}/products
  * params: { date_from, date_to, item_id, limit }

@@ -8,6 +8,7 @@ import BrandAnalyticsPage from './pages/BrandAnalyticsPage'
 import ScoringPage from './pages/ScoringPage'
 import SettingsPage from './pages/SettingsPage'
 import PnLPage from './pages/PnLPage'
+import FunnelPage from './pages/FunnelPage'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 
@@ -60,7 +61,7 @@ export default function App() {
           <PrivateRoute><AppLayout><SettingsPage /></AppLayout></PrivateRoute>
         } />
         <Route path="/funnel" element={
-          <PrivateRoute><AppLayout><PlaceholderPage title="Воронка продаж" icon="🎯" /></AppLayout></PrivateRoute>
+          <PrivateRoute><AppLayout><FunnelPage /></AppLayout></PrivateRoute>
         } />
         <Route path="/hypotheses" element={
           <PrivateRoute><AppLayout><PlaceholderPage title="Гипотезы" icon="💡" /></AppLayout></PrivateRoute>
